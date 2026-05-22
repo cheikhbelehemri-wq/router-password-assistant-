@@ -1,33 +1,22 @@
-name: Build Android APK From Upload
+name: Build Android APK
 on: [push, workflow_dispatch]
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
-      # إذا كان المرفوع ملف ZIP، سيقوم السيرفر بفك ضغطه تلقائياً هنا
-      - name: Check and Unzip if needed
-        run: |
-          if [ -f *.zip ]; then
-            unzip *.zip -d .
-          fi
-          
-      - name: set up JDK 17
+      - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
-          
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew || true
-        
+      - name: Grant execute permission
+        run: chmod +x gradlew
       - name: Build with Gradle
         run: ./gradlew assembleDebug --stacktrace
-        
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: HexApp-Ready
-          path: "**/build/outputs/apk/debug/*.apk"
+          path: app/build/outputs/apk/debug/*.apk
           
