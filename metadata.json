@@ -1,0 +1,6 @@
+{
+  "name": "Router Password Assistant",
+  "description": "أداة متطورة للتحويل والتبديل التلقائي واليدوي لمكمل السداسي عشر (Hex Complement) لشبكات الوايفاي والراوتر بالكامل بدون اتصال.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
