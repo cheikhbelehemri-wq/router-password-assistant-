@@ -20,8 +20,28 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
+      - name: Create debug keystore in all required paths
+        run: |
+          # generate a debug.keystore used by the project's signingConfig
+          keytool -genkeypair -v \
+            -keystore debug.keystore \
+            -storepass android \
+            -keypass android \
+            -alias androiddebugkey \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+          # ensure keystore is available in app/ if signingConfig references it there
+          mkdir -p app
+          cp debug.keystore app/debug.keystore || true
+          ls -la debug.keystore app/debug.keystore
+
+      - name: Ensure Gradle wrapper is executable
+        run: chmod +x ./gradlew
+
       - name: Build with Gradle
-        run: gradle assembleDebug --stacktrace
+        run: ./gradlew assembleDebug --stacktrace
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
