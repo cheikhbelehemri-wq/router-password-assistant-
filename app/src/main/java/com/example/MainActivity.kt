@@ -431,6 +431,75 @@ fun tryWifiNetworkSuggestionFallback(
     }
 }
 
+// Remove Wi-Fi Network Suggestion / Saved Configuration
+fun removeWifiNetworkSuggestion(
+    context: Context,
+    ssid: String,
+    onStatusUpdate: (String) -> Unit
+) {
+    if (ssid.isBlank()) {
+        onStatusUpdate("SSID is empty")
+        return
+    }
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        if (wifiManager != null) {
+            try {
+                val suggestion = WifiNetworkSuggestion.Builder()
+                    .setSsid(ssid)
+                    .build()
+
+                val status = wifiManager.removeNetworkSuggestions(listOf(suggestion))
+                if (status == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS) {
+                    val msg = "Network suggestion removed"
+                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                    onStatusUpdate("Network suggestion removed for '$ssid'")
+                } else {
+                    val msg = "Network suggestion removed"
+                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                    onStatusUpdate("Removal status code: $status")
+                }
+            } catch (e: Exception) {
+                val msg = "Failed to remove suggestion: ${e.localizedMessage}"
+                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                onStatusUpdate(msg)
+            }
+        } else {
+            onStatusUpdate("Wi-Fi Manager unavailable")
+        }
+    } else {
+        @Suppress("DEPRECATION")
+        val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        if (wifiManager != null) {
+            try {
+                @Suppress("DEPRECATION")
+                val configured = wifiManager.configuredNetworks
+                val match = configured?.firstOrNull { it.SSID == "\"$ssid\"" || it.SSID == ssid }
+                if (match != null) {
+                    @Suppress("DEPRECATION")
+                    wifiManager.removeNetwork(match.networkId)
+                    @Suppress("DEPRECATION")
+                    wifiManager.saveConfiguration()
+                    val msg = "Network suggestion removed"
+                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                    onStatusUpdate("Removed network '$ssid'")
+                } else {
+                    val msg = "Network suggestion removed"
+                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                    onStatusUpdate("Network '$ssid' not found")
+                }
+            } catch (e: Exception) {
+                val msg = "Failed to remove network: ${e.localizedMessage}"
+                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                onStatusUpdate(msg)
+            }
+        } else {
+            onStatusUpdate("Wi-Fi Manager unavailable")
+        }
+    }
+}
+
 // Auto-Connect to Wi-Fi with Permissions, GPS Check, Clipboard Backup, and Dual Mechanism
 fun connectToWifiNetwork(
     context: Context,
@@ -1111,7 +1180,7 @@ fun ConvertScreen(
                                     )
                                 )
                                 Spacer(modifier = Modifier.height(16.dp))
-                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Button(
                                         onClick = {
                                             copyToClipboard(context, parseResult.suggestedPassword) {
@@ -1121,14 +1190,14 @@ fun ConvertScreen(
                                         },
                                         shape = RoundedCornerShape(12.dp),
                                         colors = ButtonDefaults.buttonColors(containerColor = SoftIndigoAccent),
-                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.ContentCopy,
                                             contentDescription = "Copy",
                                             modifier = Modifier.size(18.dp)
                                         )
-                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
                                         Text("Copy", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.ExtraBold))
                                     }
 
@@ -1147,15 +1216,44 @@ fun ConvertScreen(
                                         },
                                         shape = RoundedCornerShape(12.dp),
                                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
-                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.NetworkCheck,
                                             contentDescription = "Auto Connect",
                                             modifier = Modifier.size(18.dp)
                                         )
-                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
                                         Text("Auto-Connect", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.ExtraBold))
+                                    }
+
+                                    OutlinedButton(
+                                        onClick = {
+                                            removeWifiNetworkSuggestion(
+                                                context = context,
+                                                ssid = ssidInput
+                                            ) { status ->
+                                                wifiStatusText = status
+                                            }
+                                        },
+                                        shape = RoundedCornerShape(12.dp),
+                                        border = BorderStroke(1.dp, Color(0xFFEF4444)),
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.WifiOff,
+                                            contentDescription = "Forget Network",
+                                            tint = Color(0xFFEF4444),
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            "Forget",
+                                            style = MaterialTheme.typography.labelLarge.copy(
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = Color(0xFFEF4444)
+                                            )
+                                        )
                                     }
                                 }
 
@@ -1332,25 +1430,44 @@ fun ConvertScreen(
                                                 }
 
                                                 if (res.isValid) {
-                                                    IconButton(
-                                                        onClick = {
-                                                            connectToWifiNetwork(
-                                                                context = context,
-                                                                ssid = item.ssid,
-                                                                password = res.suggestedPassword,
-                                                                onRequestPermissions = {
-                                                                    permissionLauncher.launch(requiredPermissions)
+                                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                                        IconButton(
+                                                            onClick = {
+                                                                connectToWifiNetwork(
+                                                                    context = context,
+                                                                    ssid = item.ssid,
+                                                                    password = res.suggestedPassword,
+                                                                    onRequestPermissions = {
+                                                                        permissionLauncher.launch(requiredPermissions)
+                                                                    }
+                                                                ) { status ->
+                                                                    wifiStatusText = status
                                                                 }
-                                                            ) { status ->
-                                                                wifiStatusText = status
                                                             }
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = Icons.Default.NetworkCheck,
+                                                                contentDescription = "Auto Connect",
+                                                                tint = Color(0xFF10B981)
+                                                            )
                                                         }
-                                                    ) {
-                                                        Icon(
-                                                            imageVector = Icons.Default.NetworkCheck,
-                                                            contentDescription = "Auto Connect",
-                                                            tint = Color(0xFF10B981)
-                                                        )
+
+                                                        IconButton(
+                                                            onClick = {
+                                                                removeWifiNetworkSuggestion(
+                                                                    context = context,
+                                                                    ssid = item.ssid
+                                                                ) { status ->
+                                                                    wifiStatusText = status
+                                                                }
+                                                            }
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = Icons.Default.WifiOff,
+                                                                contentDescription = "Forget Network",
+                                                                tint = Color(0xFFEF4444)
+                                                            )
+                                                        }
                                                     }
                                                 }
                                             }
