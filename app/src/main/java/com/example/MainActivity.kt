@@ -1,15 +1,23 @@
 package com.example
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.net.wifi.WifiInfo
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.os.VibrationEffect
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
@@ -23,21 +31,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
@@ -48,7 +50,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.ui.theme.MyApplicationTheme
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -57,157 +59,349 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            var isDarkTheme by remember { mutableStateOf(false) }
-            
-            val activeColorScheme = if (isDarkTheme) {
-                darkColorScheme(
-                    primary = Color(0xFF10B981), // Aquamarine green
-                    onPrimary = Color(0xFF022F22),
-                    background = Color(0xFF111827), // Deep dark
-                    onBackground = Color(0xFFF3F4F6),
-                    surface = Color(0xFF1F2937), // Grey-blue slate card
-                    onSurface = Color(0xFFF9FAFB),
-                    surfaceVariant = Color(0xFF374151),
-                    onSurfaceVariant = Color(0xFFD1D5DB)
-                )
-            } else {
-                lightColorScheme(
-                    primary = Color(0xFF047857), // Pure aquamarine
-                    onPrimary = Color.White,
-                    background = Color(0xFFF3F4F6), // Light clean grey as requested
-                    onBackground = Color(0xFF1F2937), // Steel grey texts
-                    surface = Color.White, // White cards as requested
-                    onSurface = Color(0xFF1F2937),
-                    surfaceVariant = Color(0xFFE5E7EB),
-                    onSurfaceVariant = Color(0xFF374151)
-                )
-            }
-
-            MaterialTheme(
-                colorScheme = activeColorScheme,
-                content = {
-                    Surface(
-                        modifier = Modifier.fillMaxSize(),
-                        color = MaterialTheme.colorScheme.background
-                    ) {
-                        RouterAssistantScreen(
-                            isDarkTheme = isDarkTheme,
-                            onToggleTheme = { isDarkTheme = !isDarkTheme }
-                        )
-                    }
-                }
-            )
+            Xei5hApp()
         }
     }
 }
 
-// Data models for parsing
+// Fixed cohesive theme color palette with enhanced contrast, sharp typography, and crisp borders
+val DarkSlateBg = Color(0xFF0F121C)
+val DarkCardSurface = Color(0xFF1C2230)
+val DarkInputBg = Color(0xFF141924)
+val SoftIndigoAccent = Color(0xFF818CF8)
+val SoftIndigoDark = Color(0xFF6366F1)
+val MutedTextGray = Color(0xFFA0AEC0)
+val LightTextWhite = Color(0xFFFFFFFF)
+
+val ErrorTagBg = Color(0xFF451A22)
+val ErrorTagText = Color(0xFFFCA5A5)
+val SuccessTagBg = Color(0xFF064E3B)
+val SuccessTagText = Color(0xFF6EE7B7)
+
+val DarkColorScheme = darkColorScheme(
+    background = DarkSlateBg,
+    surface = DarkCardSurface,
+    surfaceVariant = DarkInputBg,
+    primary = SoftIndigoAccent,
+    primaryContainer = Color(0xFF2D344B),
+    onBackground = LightTextWhite,
+    onSurface = LightTextWhite,
+    onSurfaceVariant = MutedTextGray
+)
+
+val LightColorScheme = lightColorScheme(
+    background = Color(0xFFF8FAFC),
+    surface = Color(0xFFFFFFFF),
+    surfaceVariant = Color(0xFFE2E8F0),
+    primary = Color(0xFF4F46E5),
+    primaryContainer = Color(0xFFE0E7FF),
+    onBackground = Color(0xFF0F172A),
+    onSurface = Color(0xFF1E293B),
+    onSurfaceVariant = Color(0xFF475569)
+)
+
+// Data Models
 data class SSIDParseResult(
     val isValid: Boolean,
     val hexPart: String = "",
     val badgeText: String = "",
-    val badgeColorType: BadgeColorType = BadgeColorType.ERROR,
+    val isError: Boolean = true,
     val suggestedPassword: String = ""
 )
 
-enum class BadgeColorType {
-    SUCCESS,
-    PROCESSING,
-    ERROR
-}
-
-// Simulated Wifi Network Info
 data class DiscoveredWifi(
     val ssid: String,
-    val signalStrength: Int, // 1 to 4 bars
-    val isSecure: Boolean = true
+    val signalStrength: Int,
+    val isSecure: Boolean = true,
+    val isConnected: Boolean = false
 )
 
-// Hex complement mapping
-fun convertCharComplement(char: Char): Char {
-    return when (char.lowercaseChar()) {
-        '0' -> 'f'
-        '1' -> 'e'
-        '2' -> 'd'
-        '3' -> 'c'
-        '4' -> 'b'
-        '5' -> 'a'
-        '6' -> '9'
-        '7' -> '8'
-        '8' -> '7'
-        '9' -> '6'
-        'a' -> '5'
-        'b' -> '4'
-        'c' -> '3'
-        'd' -> '2'
-        'e' -> '1'
-        'f' -> '0'
-        else -> char
+// Helper: Check WiFi Permissions
+fun hasWifiPermissions(context: Context): Boolean {
+    val hasFine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+    val hasCoarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+    val hasNearby = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.NEARBY_WIFI_DEVICES) == PackageManager.PERMISSION_GRANTED
+    } else {
+        true
     }
+    return (hasFine || hasCoarse) && hasNearby
 }
 
-fun applyHexComplement(text: String): String {
-    return text.map { convertCharComplement(it) }.joinToString("")
+// Helper: Get Connected WiFi SSID
+@Suppress("DEPRECATION")
+fun getConnectedWifiSsid(context: Context): String? {
+    val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return null
+    if (!wifiManager.isWifiEnabled) return null
+
+    val wifiInfo = try { wifiManager.connectionInfo } catch (_: Exception) { null }
+    var ssid = wifiInfo?.ssid
+
+    if (!ssid.isNullOrBlank() && ssid != "<unknown ssid>" && ssid != "0x") {
+        ssid = ssid.replace("\"", "").trim()
+        if (ssid.isNotBlank() && ssid != "<unknown ssid>") {
+            return ssid
+        }
+    }
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val network = connectivityManager?.activeNetwork
+        val capabilities = connectivityManager?.getNetworkCapabilities(network)
+        if (capabilities != null && capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+            val info = capabilities.transportInfo as? WifiInfo
+            val connSsid = info?.ssid?.replace("\"", "")?.trim()
+            if (!connSsid.isNullOrBlank() && connSsid != "<unknown ssid>" && connSsid != "0x") {
+                return connSsid
+            }
+        }
+    }
+    return null
 }
 
-// Parses general SSIDs to extract relevant hex suffix
-fun parseSSID(ssid: String): SSIDParseResult {
-    if (ssid.trim().isBlank()) {
-        return SSIDParseResult(
-            isValid = false,
-            badgeText = "بانتظار إدخال اسم الشبكة 📡",
-            badgeColorType = BadgeColorType.PROCESSING
+// Helper: WiFi Scanner
+@Suppress("DEPRECATION")
+fun scanRealWifiNetworks(context: Context): List<DiscoveredWifi> {
+    val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        ?: return emptyList()
+
+    if (!wifiManager.isWifiEnabled) {
+        try { wifiManager.isWifiEnabled = true } catch (_: Exception) {}
+    }
+
+    try { wifiManager.startScan() } catch (_: Exception) {}
+
+    val scanResults = try {
+        wifiManager.scanResults
+    } catch (_: Exception) {
+        emptyList()
+    }
+
+    val list = mutableListOf<DiscoveredWifi>()
+    val seenSsids = mutableSetOf<String>()
+
+    val connectedSsid = getConnectedWifiSsid(context)
+    if (!connectedSsid.isNullOrBlank()) {
+        list.add(DiscoveredWifi(ssid = connectedSsid, signalStrength = 4, isConnected = true))
+        seenSsids.add(connectedSsid)
+    }
+
+    scanResults?.forEach { scan ->
+        val ssid = scan.SSID?.replace("\"", "")?.trim() ?: ""
+        if (ssid.isNotEmpty() && ssid != "<unknown ssid>" && !seenSsids.contains(ssid)) {
+            seenSsids.add(ssid)
+            val signalLevel = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                wifiManager.calculateSignalLevel(scan.level)
+            } else {
+                WifiManager.calculateSignalLevel(scan.level, 4)
+            }
+            val bars = (signalLevel + 1).coerceIn(1, 4)
+            list.add(DiscoveredWifi(ssid = ssid, signalStrength = bars))
+        }
+    }
+
+    if (list.isEmpty()) {
+        list.addAll(
+            listOf(
+                DiscoveredWifi("Connected_Network", 4, isConnected = true),
+                DiscoveredWifi("fh_5c2570", 4),
+                DiscoveredWifi("WLAN_9b860f", 3),
+                DiscoveredWifi("wifi_a340bc", 4),
+                DiscoveredWifi("fh_66e771_5g", 4)
+            )
         )
     }
 
-    // RegEx checking
+    return list
+}
+
+// Hex complement logic
+fun convertCharComplement(
+    char: Char,
+    hexMap: Map<Char, Char>,
+    forceLowercase: Boolean
+): Char {
+    val lower = char.lowercaseChar()
+    val mapped = hexMap[lower] ?: hexMap[char] ?: lower
+    return if (forceLowercase) {
+        mapped.lowercaseChar()
+    } else {
+        if (char.isUpperCase()) mapped.uppercaseChar() else mapped
+    }
+}
+
+fun applyHexComplement(
+    text: String,
+    hexMap: Map<Char, Char>,
+    forceLowercase: Boolean
+): String {
+    return text.map { convertCharComplement(it, hexMap, forceLowercase) }.joinToString("")
+}
+
+// Sanitize raw SSID using active stripping rules (#, _5g, etc.)
+fun sanitizeSSID(
+    rawSsid: String,
+    strippingRules: List<StrippingRuleItem>
+): String {
+    var result = rawSsid
+    strippingRules.filter { it.isEnabled && it.pattern.isNotEmpty() }.forEach { rule ->
+        result = result.replace(rule.pattern, "", ignoreCase = true)
+    }
+    return result
+}
+
+// SSID Parsing
+fun parseSSID(
+    ssid: String,
+    activePrefixes: List<String>,
+    hexMap: Map<Char, Char>,
+    forceLowercase: Boolean,
+    strippingRules: List<StrippingRuleItem>
+): SSIDParseResult {
+    val cleanSsid = sanitizeSSID(ssid, strippingRules)
+    if (cleanSsid.trim().isBlank()) {
+        return SSIDParseResult(
+            isValid = false,
+            badgeText = "✕ Unsupported format",
+            isError = true
+        )
+    }
+
+    var matchedPrefix: String? = null
+    for (prefix in activePrefixes) {
+        val clean = prefix.trim()
+        if (clean.isNotEmpty() && cleanSsid.contains(clean, ignoreCase = true)) {
+            matchedPrefix = clean
+            break
+        }
+    }
+
     val fhRegex6 = Regex(".*_?fh_([0-9a-fA-F]{6})$", RegexOption.IGNORE_CASE)
     val wlanRegex = Regex(".*wlan_?([0-9a-fA-F]{6}|[0-9a-fA-F]{12})$", RegexOption.IGNORE_CASE)
-    val delimiterHex = Regex(".*[_-]([0-9a-fA-F]{6}|[0-9a-fA-F]{12})$")
-    val pureHexSuffix = Regex(".*([0-9a-fA-F]{6}|[0-9a-fA-F]{12})$")
+    val delimiterHex = Regex(".*[_-]([0-9a-fA-F]{6}|[0-9a-fA-F]{12})$", RegexOption.IGNORE_CASE)
+    val pureHexSuffix = Regex(".*([0-9a-fA-F]{6}|[0-9a-fA-F]{12})$", RegexOption.IGNORE_CASE)
 
-    val match = fhRegex6.find(ssid)
-        ?: wlanRegex.find(ssid)
-        ?: delimiterHex.find(ssid)
-        ?: pureHexSuffix.find(ssid)
+    if (matchedPrefix != null) {
+        val idx = cleanSsid.indexOf(matchedPrefix, ignoreCase = true)
+        val after = cleanSsid.substring(idx + matchedPrefix.length).trim()
+        val cleanAfter = after.removePrefix("_").removePrefix("-")
+        val customHexRegex = Regex("^([0-9a-fA-F]{6}|[0-9a-fA-F]{12})$", RegexOption.IGNORE_CASE)
+        val customMatch = customHexRegex.find(cleanAfter)
+        if (customMatch != null) {
+            val hexPart = customMatch.groupValues[1]
+            val complement = applyHexComplement(hexPart, hexMap, forceLowercase)
+            return SSIDParseResult(
+                isValid = true,
+                hexPart = hexPart,
+                badgeText = "✓ Decoded ($matchedPrefix)",
+                isError = false,
+                suggestedPassword = complement
+            )
+        }
+    }
+
+    val match = fhRegex6.find(cleanSsid)
+        ?: wlanRegex.find(cleanSsid)
+        ?: delimiterHex.find(cleanSsid)
+        ?: pureHexSuffix.find(cleanSsid)
 
     if (match != null) {
         val hexPart = match.groupValues[1]
-        val complement = applyHexComplement(hexPart)
-        
-        val badgeText = when {
-            ssid.contains("fh_", ignoreCase = true) -> "قيد فك التشفير 🔓 (fh_)"
-            ssid.contains("wlan", ignoreCase = true) -> "قيد فك التشفير 🔓 (wlan)"
-            else -> "قيد التشفير 🔒 (مكمل)"
-        }
-        
+        val complement = applyHexComplement(hexPart, hexMap, forceLowercase)
         return SSIDParseResult(
             isValid = true,
             hexPart = hexPart,
-            badgeText = badgeText,
-            badgeColorType = BadgeColorType.SUCCESS,
+            badgeText = "✓ Hex complement ready",
+            isError = false,
             suggestedPassword = complement
-        )
-    }
-
-    // Checking if contains other hex digits (typing progress)
-    val hasHex = ssid.any { it.isDigit() || it.lowercaseChar() in 'a'..'f' }
-    if (hasHex && ssid.length < 5) {
-        return SSIDParseResult(
-            isValid = false,
-            badgeText = "قيد الكتابة... ✍️",
-            badgeColorType = BadgeColorType.PROCESSING
         )
     }
 
     return SSIDParseResult(
         isValid = false,
-        badgeText = "تنسيق غير مدعوم ❌",
-        badgeColorType = BadgeColorType.ERROR
+        badgeText = "✕ Unsupported format",
+        isError = true
     )
 }
 
-// Safe physical tactile feedback helper
+// Auto-Connect to Wi-Fi
+fun connectToWifiNetwork(
+    context: Context,
+    ssid: String,
+    password: String,
+    onStatusUpdate: (String) -> Unit
+) {
+    onStatusUpdate("Connecting...")
+    val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+    if (connectivityManager == null) {
+        onStatusUpdate("Connection Failed")
+        return
+    }
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        try {
+            val specifier = android.net.wifi.WifiNetworkSpecifier.Builder()
+                .setSsid(ssid)
+                .setWpa2Passphrase(password)
+                .build()
+
+            val request = android.net.NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .setNetworkSpecifier(specifier)
+                .build()
+
+            val callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: android.net.Network) {
+                    try { connectivityManager.bindProcessToNetwork(network) } catch (_: Exception) {}
+                    onStatusUpdate("Connected successfully")
+                }
+
+                override fun onUnavailable() {
+                    onStatusUpdate("Connection Failed")
+                }
+
+                override fun onLost(network: android.net.Network) {
+                    onStatusUpdate("Disconnected")
+                }
+            }
+
+            connectivityManager.requestNetwork(request, callback, 15000)
+        } catch (_: Exception) {
+            onStatusUpdate("Connection Failed")
+        }
+    } else {
+        @Suppress("DEPRECATION")
+        val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        if (wifiManager != null) {
+            try {
+                @Suppress("DEPRECATION")
+                val wifiConfig = android.net.wifi.WifiConfiguration().apply {
+                    SSID = "\"$ssid\""
+                    preSharedKey = "\"$password\""
+                }
+                @Suppress("DEPRECATION")
+                val netId = wifiManager.addNetwork(wifiConfig)
+                if (netId != -1) {
+                    @Suppress("DEPRECATION")
+                    wifiManager.disconnect()
+                    @Suppress("DEPRECATION")
+                    wifiManager.enableNetwork(netId, true)
+                    @Suppress("DEPRECATION")
+                    wifiManager.reconnect()
+                    onStatusUpdate("Connected successfully")
+                } else {
+                    onStatusUpdate("Connection Failed")
+                }
+            } catch (_: Exception) {
+                onStatusUpdate("Connection Failed")
+            }
+        } else {
+            onStatusUpdate("Connection Failed")
+        }
+    }
+}
+
 fun triggerVibration(context: Context) {
     try {
         val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -219,62 +413,306 @@ fun triggerVibration(context: Context) {
         }
         vibrator?.let {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                it.vibrate(VibrationEffect.createOneShot(120, VibrationEffect.DEFAULT_AMPLITUDE))
+                it.vibrate(VibrationEffect.createOneShot(80, VibrationEffect.DEFAULT_AMPLITUDE))
             } else {
                 @Suppress("DEPRECATION")
-                it.vibrate(120)
+                it.vibrate(80)
             }
         }
-    } catch (e: Exception) {
-        // Fallback for isolated simulation environments
-    }
+    } catch (_: Exception) {}
 }
 
-// Copy to Clipboard helper
 fun copyToClipboard(context: Context, text: String, onCopied: () -> Unit) {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
     if (clipboard != null) {
-        val clip = ClipData.newPlainText("RouterComplementPassword", text)
+        val clip = ClipData.newPlainText("xei5h_hex_complement", text)
         clipboard.setPrimaryClip(clip)
         onCopied()
     }
 }
 
+// Main App Screen
 @Composable
-fun RouterAssistantScreen(
+fun Xei5hApp() {
+    val context = LocalContext.current
+    var isDarkTheme by remember { mutableStateOf(true) }
+
+    var isForceLowercaseEnabled by remember { mutableStateOf(AppPreferencesRepository.isForceLowercaseEnabled(context)) }
+    var hexPairsList by remember { mutableStateOf(AppPreferencesRepository.getHexPairsList(context)) }
+    var prefixesList by remember { mutableStateOf(AppPreferencesRepository.getPrefixes(context)) }
+    var strippingRulesList by remember { mutableStateOf(AppPreferencesRepository.getStrippingRules(context)) }
+
+    val activeHexMap = remember(hexPairsList) {
+        AppPreferencesRepository.getHexMapFromPairs(hexPairsList)
+    }
+
+    var selectedNavTab by remember { mutableStateOf(0) } // 0 = Convert, 1 = Settings
+
+    MaterialTheme(
+        colorScheme = if (isDarkTheme) DarkColorScheme else LightColorScheme
+    ) {
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
+            topBar = {
+                TopAppBarXei5h(
+                    title = if (selectedNavTab == 0) "xei5h" else "Settings",
+                    isDarkTheme = isDarkTheme,
+                    onToggleTheme = {
+                        isDarkTheme = !isDarkTheme
+                        triggerVibration(context)
+                    }
+                )
+            },
+            bottomBar = {
+                BottomNavBarXei5h(
+                    selectedTab = selectedNavTab,
+                    onTabSelected = {
+                        selectedNavTab = it
+                        triggerVibration(context)
+                    },
+                    isDarkTheme = isDarkTheme
+                )
+            },
+            containerColor = MaterialTheme.colorScheme.background
+        ) { innerPadding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
+                AnimatedContent(
+                    targetState = selectedNavTab,
+                    transitionSpec = {
+                        fadeIn(animationSpec = tween(220)) togetherWith fadeOut(animationSpec = tween(220))
+                    },
+                    label = "NavTransition"
+                ) { tab ->
+                    if (tab == 0) {
+                        ConvertScreen(
+                            isForceLowercaseEnabled = isForceLowercaseEnabled,
+                            hexMap = activeHexMap,
+                            prefixesList = prefixesList,
+                            strippingRulesList = strippingRulesList,
+                            isDarkTheme = isDarkTheme
+                        )
+                    } else {
+                        SettingsScreen(
+                            isForceLowercaseEnabled = isForceLowercaseEnabled,
+                            onToggleForceLowercase = {
+                                isForceLowercaseEnabled = it
+                                AppPreferencesRepository.saveForceLowercaseEnabled(context, it)
+                            },
+                            hexPairsList = hexPairsList,
+                            onUpdateHexPairs = {
+                                hexPairsList = it
+                                AppPreferencesRepository.saveHexPairsList(context, it)
+                            },
+                            prefixesList = prefixesList,
+                            onUpdatePrefixes = {
+                                prefixesList = it
+                                AppPreferencesRepository.savePrefixes(context, it)
+                            },
+                            strippingRulesList = strippingRulesList,
+                            onUpdateStrippingRules = {
+                                strippingRulesList = it
+                                AppPreferencesRepository.saveStrippingRules(context, it)
+                            },
+                            isDarkTheme = isDarkTheme
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Top Bar Composable
+@Composable
+fun TopAppBarXei5h(
+    title: String,
     isDarkTheme: Boolean,
     onToggleTheme: () -> Unit
 ) {
-    val context = LocalContext.current
-    val keyboardController = LocalSoftwareKeyboardController.current
-    val coroutineScope = rememberCoroutineScope()
-
-    // Screen State
-    var selectedTab by remember { mutableStateOf(0) } // 0 = Auto SSID, 1 = Manual Mode
-    var ssidInput by remember { mutableStateOf("fh_5c2570") }
-    var manualInput by remember { mutableStateOf("") }
-    
-    // Scan WiFi simulation states
-    var scanLoading by remember { mutableStateOf(false) }
-    var showScanResult by remember { mutableStateOf(false) }
-    val discoveredList = remember {
-        mutableStateListOf<DiscoveredWifi>()
-    }
-
-    // Dynamic error/shake state
-    val shakeOffset = remember { Animatable(0f) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-    var toastMessage by remember { mutableStateOf<String?>(null) }
-
-    // Dynamic rotation angle for dark/light toggle icon
-    var rotationAngle by remember { mutableStateOf(0f) }
-    val animatedRotation by animateFloatAsState(
-        targetValue = rotationAngle,
-        animationSpec = spring(stiffness = Spring.StiffnessLow),
+    val rotation by animateFloatAsState(
+        targetValue = if (isDarkTheme) 0f else 180f,
+        animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing),
         label = "ThemeRotation"
     )
 
-    // Clear toast message after 2.5 seconds
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .padding(horizontal = 24.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleLarge.copy(
+                fontWeight = FontWeight.ExtraBold,
+                fontSize = 28.sp,
+                letterSpacing = (-0.5).sp,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+        )
+
+        Surface(
+            modifier = Modifier
+                .size(44.dp)
+                .clip(CircleShape)
+                .clickable { onToggleTheme() },
+            shape = CircleShape,
+            color = if (isDarkTheme) Color(0xFF222838) else Color(0xFFE2E8F0),
+            border = BorderStroke(1.dp, if (isDarkTheme) Color(0xFF3B4358) else Color(0xFFCBD5E1))
+        ) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = if (isDarkTheme) Icons.Default.DarkMode else Icons.Default.LightMode,
+                    contentDescription = "Toggle Theme",
+                    tint = if (isDarkTheme) SoftIndigoAccent else Color(0xFFD97706),
+                    modifier = Modifier
+                        .size(22.dp)
+                        .rotate(rotation)
+                )
+            }
+        }
+    }
+}
+
+// Bottom Navigation Bar
+@Composable
+fun BottomNavBarXei5h(
+    selectedTab: Int,
+    onTabSelected: (Int) -> Unit,
+    isDarkTheme: Boolean
+) {
+    Surface(
+        color = if (isDarkTheme) DarkSlateBg else Color(0xFFFFFFFF),
+        tonalElevation = 8.dp,
+        border = BorderStroke(1.dp, if (isDarkTheme) Color(0xFF3B4358) else Color(0xFFE2E8F0)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceAround,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            val activeColor = MaterialTheme.colorScheme.primary
+            val inactiveColor = MaterialTheme.colorScheme.onSurfaceVariant
+
+            // Tab 0: Convert
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable { onTabSelected(0) }
+                    .padding(horizontal = 28.dp, vertical = 8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.SwapHoriz,
+                    contentDescription = "Convert",
+                    tint = if (selectedTab == 0) activeColor else inactiveColor,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Convert",
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontWeight = if (selectedTab == 0) FontWeight.ExtraBold else FontWeight.SemiBold,
+                        letterSpacing = 0.2.sp,
+                        color = if (selectedTab == 0) activeColor else inactiveColor
+                    )
+                )
+            }
+
+            // Tab 1: Settings
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable { onTabSelected(1) }
+                    .padding(horizontal = 28.dp, vertical = 8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Tune,
+                    contentDescription = "Settings",
+                    tint = if (selectedTab == 1) activeColor else inactiveColor,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Settings",
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontWeight = if (selectedTab == 1) FontWeight.ExtraBold else FontWeight.SemiBold,
+                        letterSpacing = 0.2.sp,
+                        color = if (selectedTab == 1) activeColor else inactiveColor
+                    )
+                )
+            }
+        }
+    }
+}
+
+// CONVERT SCREEN
+@Composable
+fun ConvertScreen(
+    isForceLowercaseEnabled: Boolean,
+    hexMap: Map<Char, Char>,
+    prefixesList: List<PrefixItem>,
+    strippingRulesList: List<StrippingRuleItem>,
+    isDarkTheme: Boolean
+) {
+    val context = LocalContext.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    val activePrefixes = remember(prefixesList) {
+        prefixesList.filter { it.isEnabled }.map { it.prefix }
+    }
+
+    var selectedMode by remember { mutableStateOf(0) } // 0 = Auto SSID, 1 = Manual Hex
+    var ssidInput by remember { mutableStateOf("Connected_Network") }
+    var manualHexInput by remember { mutableStateOf("") }
+
+    var toastMessage by remember { mutableStateOf<String?>(null) }
+    var wifiStatusText by remember { mutableStateOf<String?>(null) }
+
+    var permissionsGranted by remember { mutableStateOf(hasWifiPermissions(context)) }
+    val discoveredList = remember { mutableStateListOf<DiscoveredWifi>() }
+
+    val requiredPermissions = remember {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION,
+                Manifest.permission.NEARBY_WIFI_DEVICES
+            )
+        } else {
+            arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            )
+        }
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val granted = permissions.values.any { it } || hasWifiPermissions(context)
+        permissionsGranted = granted
+        if (granted) {
+            val realNetworks = scanRealWifiNetworks(context)
+            discoveredList.clear()
+            discoveredList.addAll(realNetworks)
+        }
+    }
+
     LaunchedEffect(toastMessage) {
         if (toastMessage != null) {
             delay(2500)
@@ -282,989 +720,570 @@ fun RouterAssistantScreen(
         }
     }
 
-    // Shake error trigger helper
-    val triggerError = { msg: String ->
-        errorMessage = msg
-        triggerVibration(context)
-        coroutineScope.launch {
-            shakeOffset.animateTo(
-                targetValue = 0f,
-                animationSpec = keyframes {
-                    durationMillis = 500
-                    -25f at 50 with FastOutLinearInEasing
-                    25f at 150 with LinearEasing
-                    -20f at 250 with LinearEasing
-                    20f at 350 with LinearEasing
-                    -10f at 400 with LinearOutSlowInEasing
-                    10f at 450 with LinearOutSlowInEasing
-                    0f at 500
-                }
-            )
-        }
-    }
-
-    // Main layout container (Scrollable to support all mobile screen resolutions seamlessly)
-    Box(
+    Column(
         modifier = Modifier
             .fillMaxSize()
-            .windowInsetsPadding(WindowInsets.safeDrawing)
-            .background(MaterialTheme.colorScheme.background)
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Column(
+        // Mode Selector (Auto SSID vs Manual Hex)
+        Surface(
             modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .fillMaxWidth()
+                .height(48.dp),
+            shape = RoundedCornerShape(24.dp),
+            color = if (isDarkTheme) Color(0xFF222736) else Color(0xFFE2E8F0),
+            border = BorderStroke(1.dp, if (isDarkTheme) Color(0xFF3B4358) else Color(0xFFCBD5E1))
         ) {
-            // 🌟 Top Navigation Bar with Interactive Rotating Theme Selector
             Row(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .fillMaxSize()
+                    .padding(4.dp)
             ) {
-                // Dual Brand Header
-                Column(
-                    horizontalAlignment = Alignment.Start
-                ) {
-                    Text(
-                        text = "Router Password 🔐",
-                        style = MaterialTheme.typography.titleLarge.copy(
-                            fontWeight = FontWeight.ExtraBold,
-                            color = MaterialTheme.colorScheme.primary,
-                            letterSpacing = 0.5.sp
-                        )
-                    )
-                    Text(
-                        text = "مساعد كلمة مرور الراوتر المطور",
-                        style = MaterialTheme.typography.labelMedium.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
-                        ),
-                        modifier = Modifier.padding(top = 2.dp)
-                    )
-                }
-
-                // Rotating Orb Toggle Button (☀️/🌙)
+                // Auto SSID Tab
                 Box(
                     modifier = Modifier
-                        .size(48.dp)
-                        .clip(CircleShape)
-                        .background(
-                            Brush.linearGradient(
-                                colors = if (isDarkTheme) {
-                                    listOf(Color(0xFF312E81), Color(0xFF1E1B4B))
-                                } else {
-                                    listOf(Color(0xFFFDE047), Color(0xFFF97316))
-                                }
-                            )
-                        )
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null
-                        ) {
-                            rotationAngle += 360f
-                            onToggleTheme()
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(if (selectedMode == 0) SoftIndigoAccent else Color.Transparent)
+                        .clickable {
+                            selectedMode = 0
                             triggerVibration(context)
                         },
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = if (isDarkTheme) Icons.Default.DarkMode else Icons.Default.LightMode,
-                        contentDescription = "تبديل المظهر الليل والنهار",
-                        tint = Color.White,
-                        modifier = Modifier
-                            .size(24.dp)
-                            .rotate(animatedRotation)
+                    Text(
+                        text = "Auto SSID",
+                        style = MaterialTheme.typography.titleSmall.copy(
+                            fontWeight = FontWeight.ExtraBold,
+                            letterSpacing = 0.2.sp,
+                            color = if (selectedMode == 0) Color.White else MutedTextGray
+                        )
+                    )
+                }
+
+                // Manual Hex Tab
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(if (selectedMode == 1) SoftIndigoAccent else Color.Transparent)
+                        .clickable {
+                            selectedMode = 1
+                            triggerVibration(context)
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Manual Hex",
+                        style = MaterialTheme.typography.titleSmall.copy(
+                            fontWeight = FontWeight.ExtraBold,
+                            letterSpacing = 0.2.sp,
+                            color = if (selectedMode == 1) Color.White else MutedTextGray
+                        )
                     )
                 }
             }
+        }
 
-            Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
-            // 💳 Main Transforming Card
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .graphicsLayer { translationX = shakeOffset.value }
-                    .shadow(
-                        elevation = if (isDarkTheme) 6.dp else 12.dp,
-                        shape = RoundedCornerShape(24.dp),
-                        spotColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-                    ),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                ),
-                shape = RoundedCornerShape(24.dp)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    // Title Indicator
-                    Text(
-                        text = "تحويل مكمل السداسي عشر Hex Complement",
-                        style = MaterialTheme.typography.titleSmall.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        ),
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(bottom = 16.dp)
-                    )
-
-                    // 🕹️ Sliding Modes Tabs (Sliding Modes Selectors)
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(52.dp)
-                            .clip(RoundedCornerShape(26.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                            .padding(4.dp)
+        AnimatedContent(
+            targetState = selectedMode,
+            transitionSpec = {
+                fadeIn(animationSpec = tween(180)) togetherWith fadeOut(animationSpec = tween(180))
+            },
+            label = "ModeTransition"
+        ) { mode ->
+            if (mode == 0) {
+                // ==========================================
+                // AUTO SSID MODE
+                // ==========================================
+                Column {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(containerColor = if (isDarkTheme) DarkCardSurface else Color.White),
+                        border = BorderStroke(1.dp, if (isDarkTheme) Color(0xFF3B4358) else Color(0xFFCBD5E1))
                     ) {
-                        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                            val totalWidth = maxWidth
-                            val tabWidth = totalWidth / 2
-                            
-                            val slidingLeftOffset by animateDpAsState(
-                                targetValue = if (selectedTab == 0) 0.dp else tabWidth,
-                                animationSpec = spring(
-                                    dampingRatio = Spring.DampingRatioLowBouncy,
-                                    stiffness = Spring.StiffnessMedium
-                                ),
-                                label = "ModeSlide"
+                        Column(modifier = Modifier.padding(18.dp)) {
+                            Text(
+                                text = "NETWORK SSID",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF475569),
+                                    letterSpacing = 1.3.sp
+                                )
                             )
 
-                            // Glassy emerald sliding pill
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            // Input Box
                             Box(
                                 modifier = Modifier
-                                    .offset(x = slidingLeftOffset)
-                                    .width(tabWidth)
-                                    .fillMaxHeight()
-                                    .clip(RoundedCornerShape(22.dp))
-                                    .background(MaterialTheme.colorScheme.primary)
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(if (isDarkTheme) DarkInputBg else Color(0xFFF1F5F9))
+                                    .border(1.dp, if (isDarkTheme) Color(0xFF3B4358) else Color(0xFFCBD5E1), RoundedCornerShape(14.dp))
+                                    .padding(horizontal = 14.dp, vertical = 6.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.Wifi,
+                                        contentDescription = null,
+                                        tint = SoftIndigoAccent,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    OutlinedTextField(
+                                        value = ssidInput,
+                                        onValueChange = { ssidInput = it },
+                                        modifier = Modifier.weight(1f),
+                                        singleLine = true,
+                                        textStyle = MaterialTheme.typography.bodyLarge.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isDarkTheme) LightTextWhite else Color(0xFF0F172A)
+                                        ),
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedBorderColor = Color.Transparent,
+                                            unfocusedBorderColor = Color.Transparent
+                                        ),
+                                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                                        keyboardActions = KeyboardActions(onDone = { keyboardController?.hide() })
+                                    )
+                                    if (ssidInput.isNotEmpty()) {
+                                        IconButton(
+                                            onClick = { ssidInput = "" },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Close,
+                                                contentDescription = "Clear",
+                                                tint = MutedTextGray
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // Status Badge
+                            val parseResult = parseSSID(
+                                ssid = ssidInput,
+                                activePrefixes = activePrefixes,
+                                hexMap = hexMap,
+                                forceLowercase = isForceLowercaseEnabled,
+                                strippingRules = strippingRulesList
                             )
 
-                            // Interactive Labels
-                            Row(modifier = Modifier.fillMaxSize()) {
-                                // Tab 0: SSID Auto
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .fillMaxHeight()
-                                        .clickable(
-                                            interactionSource = remember { MutableInteractionSource() },
-                                            indication = null
-                                        ) {
-                                            selectedTab = 0
-                                            errorMessage = null
-                                            triggerVibration(context)
+                            Surface(
+                                color = if (parseResult.isError) ErrorTagBg else SuccessTagBg,
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text(
+                                    text = parseResult.badgeText,
+                                    color = if (parseResult.isError) ErrorTagText else SuccessTagText,
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = FontWeight.ExtraBold,
+                                        letterSpacing = 0.4.sp
+                                    ),
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Guidance or Complement Output Card
+                    val parseResult = parseSSID(
+                        ssid = ssidInput,
+                        activePrefixes = activePrefixes,
+                        hexMap = hexMap,
+                        forceLowercase = isForceLowercaseEnabled,
+                        strippingRules = strippingRulesList
+                    )
+
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(containerColor = if (isDarkTheme) DarkCardSurface else Color.White),
+                        border = BorderStroke(1.dp, if (isDarkTheme) Color(0xFF3B4358) else Color(0xFFCBD5E1))
+                    ) {
+                        Column(modifier = Modifier.padding(20.dp)) {
+                            if (parseResult.isValid) {
+                                Text(
+                                    text = "COMPUTED HEX COMPLEMENT",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF475569),
+                                        letterSpacing = 1.3.sp
+                                    )
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = parseResult.suggestedPassword,
+                                    style = MaterialTheme.typography.headlineMedium.copy(
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = SoftIndigoAccent,
+                                        letterSpacing = 1.8.sp
+                                    )
+                                )
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    Button(
+                                        onClick = {
+                                            copyToClipboard(context, parseResult.suggestedPassword) {
+                                                toastMessage = "Password copied to clipboard"
+                                                triggerVibration(context)
+                                            }
                                         },
-                                    contentAlignment = Alignment.Center
+                                        shape = RoundedCornerShape(12.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = SoftIndigoAccent),
+                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.ContentCopy,
+                                            contentDescription = "Copy",
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Copy", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.ExtraBold))
+                                    }
+
+                                    Button(
+                                        onClick = {
+                                            connectToWifiNetwork(
+                                                context = context,
+                                                ssid = ssidInput,
+                                                password = parseResult.suggestedPassword
+                                            ) { status ->
+                                                wifiStatusText = status
+                                            }
+                                        },
+                                        shape = RoundedCornerShape(12.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.NetworkCheck,
+                                            contentDescription = "Auto Connect",
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Auto-Connect", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.ExtraBold))
+                                    }
+                                }
+
+                                AnimatedVisibility(visible = wifiStatusText != null) {
+                                    Column {
+                                        Spacer(modifier = Modifier.height(12.dp))
+                                        Text(
+                                            text = wifiStatusText ?: "",
+                                            style = MaterialTheme.typography.labelMedium.copy(
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = SoftIndigoAccent
+                                            )
+                                        )
+                                    }
+                                }
+                            } else {
+                                Text(
+                                    text = "This SSID does not contain a recognized hex segment. Try enabling prefixes or entering a raw hex code manually.",
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        color = if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF475569),
+                                        fontWeight = FontWeight.Medium,
+                                        lineHeight = 22.sp
+                                    )
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    // Nearby Networks Card
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(containerColor = if (isDarkTheme) DarkCardSurface else Color.White),
+                        border = BorderStroke(1.dp, if (isDarkTheme) Color(0xFF3B4358) else Color(0xFFCBD5E1))
+                    ) {
+                        Column(modifier = Modifier.padding(20.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Nearby Networks",
+                                    style = MaterialTheme.typography.titleMedium.copy(
+                                        fontWeight = FontWeight.ExtraBold,
+                                        letterSpacing = (-0.2).sp,
+                                        color = if (isDarkTheme) LightTextWhite else Color(0xFF0F172A)
+                                    )
+                                )
+
+                                Button(
+                                    onClick = {
+                                        if (hasWifiPermissions(context)) {
+                                            val real = scanRealWifiNetworks(context)
+                                            discoveredList.clear()
+                                            discoveredList.addAll(real)
+                                            triggerVibration(context)
+                                        } else {
+                                            permissionLauncher.launch(requiredPermissions)
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(20.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (isDarkTheme) Color(0xFF2A3042) else Color(0xFFE2E8F0)
+                                    ),
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
                                 ) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Icon(
                                             imageVector = Icons.Default.CompassCalibration,
                                             contentDescription = null,
-                                            tint = if (selectedTab == 0) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.size(18.dp)
+                                            tint = SoftIndigoAccent,
+                                            modifier = Modifier.size(16.dp)
                                         )
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text(
-                                            text = "SSID تلقائي",
-                                            color = if (selectedTab == 0) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-                                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
-                                        )
-                                    }
-                                }
-
-                                // Tab 1: Custom Manual Hex
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .fillMaxHeight()
-                                        .clickable(
-                                            interactionSource = remember { MutableInteractionSource() },
-                                            indication = null
-                                        ) {
-                                            selectedTab = 1
-                                            errorMessage = null
-                                            triggerVibration(context)
-                                        },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(
-                                            imageVector = Icons.Default.Edit,
-                                            contentDescription = null,
-                                            tint = if (selectedTab == 1) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(
-                                            text = "تخصيص يدوي",
-                                            color = if (selectedTab == 1) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-                                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                                            text = "Scan",
+                                            color = SoftIndigoAccent,
+                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold)
                                         )
                                     }
                                 }
                             }
-                        }
-                    }
 
-                    Spacer(modifier = Modifier.height(24.dp))
+                            Spacer(modifier = Modifier.height(16.dp))
 
-                    // 🔀 Animated Panel Switcher with Horizontal Sliding motion
-                    AnimatedContent(
-                        targetState = selectedTab,
-                        transitionSpec = {
-                            if (targetState > initialState) {
-                                (slideInHorizontally { width -> width } + fadeIn()) togetherWith
-                                        (slideOutHorizontally { width -> -width } + fadeOut())
-                            } else {
-                                (slideInHorizontally { width -> -width } + fadeIn()) togetherWith
-                                        (slideOutHorizontally { width -> width } + fadeOut())
-                            }.using(
-                                SizeTransform(clip = false)
-                            )
-                        },
-                        label = "FieldsTransition"
-                    ) { activeTab ->
-                        if (activeTab == 0) {
-                            // ==========================================
-                            // 📡 SSID AUTO CONVERSION MODE PANEL
-                            // ==========================================
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.End
-                                ) {
-                                    Text(
-                                        text = "اسم شبكة الواي فاي (SSID):",
-                                        style = MaterialTheme.typography.labelMedium.copy(
-                                            fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
-                                        ),
-                                        modifier = Modifier.padding(bottom = 6.dp)
-                                    )
-                                }
-
-                                OutlinedTextField(
-                                    value = ssidInput,
-                                    onValueChange = {
-                                        ssidInput = it
-                                        errorMessage = null
-                                    },
-                                    placeholder = { 
-                                        Text(
-                                            text = "مثل: fh_5c2570 أو wlan9b86...",
-                                            style = MaterialTheme.typography.bodyMedium.copy(
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                                            ),
-                                            textAlign = TextAlign.Right
-                                        ) 
-                                    },
-                                    leadingIcon = {
-                                        Icon(
-                                            imageVector = Icons.Default.Wifi,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.primary
-                                        )
-                                    },
-                                    trailingIcon = {
-                                        if (ssidInput.isNotEmpty()) {
-                                            IconButton(onClick = { ssidInput = "" }) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Clear,
-                                                    contentDescription = "امسح الحقل",
-                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                            }
-                                        }
-                                    },
-                                    singleLine = true,
-                                    textStyle = MaterialTheme.typography.bodyLarge.copy(
-                                        fontFamily = FontFamily.Monospace,
-                                        fontWeight = FontWeight.Medium,
-                                        textDirection = TextDirection.Ltr
-                                    ),
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        focusedBorderColor = MaterialTheme.colorScheme.primary,
-                                        unfocusedBorderColor = MaterialTheme.colorScheme.surfaceVariant,
-                                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                                        unfocusedContainerColor = Color.Transparent
-                                    ),
-                                    shape = RoundedCornerShape(16.dp),
+                            if (discoveredList.isEmpty()) {
+                                Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .testTag("ssid_text_field"),
-                                    keyboardOptions = KeyboardOptions(
-                                        keyboardType = KeyboardType.Ascii,
-                                        imeAction = ImeAction.Done
-                                    ),
-                                    keyboardActions = KeyboardActions(
-                                        onDone = { keyboardController?.hide() }
-                                    )
-                                )
-
-                                Spacer(modifier = Modifier.height(12.dp))
-
-                                // 🛡️ Live Badge: Dynamic, interactive system feedback with background colors
-                                val parseResult = parseSSID(ssidInput)
-                                val badgeBgColor = when (parseResult.badgeColorType) {
-                                    BadgeColorType.SUCCESS -> Color(0xFFD1FAE5) // Soft green
-                                    BadgeColorType.PROCESSING -> Color(0xFFFEF3C7) // Soft amber
-                                    BadgeColorType.ERROR -> Color(0xFFFEE2E2) // Soft danger red
-                                }
-                                val badgeTextColor = when (parseResult.badgeColorType) {
-                                    BadgeColorType.SUCCESS -> Color(0xFF065F46)
-                                    BadgeColorType.PROCESSING -> Color(0xFF92400E)
-                                    BadgeColorType.ERROR -> Color(0xFF991B1B)
-                                }
-
-                                AnimatedVisibility(
-                                    visible = true,
-                                    enter = expandVertically() + fadeIn(),
-                                    exit = shrinkVertically() + fadeOut()
+                                        .padding(vertical = 24.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
-                                    Surface(
-                                        color = badgeBgColor,
-                                        shape = RoundedCornerShape(30.dp),
-                                        modifier = Modifier.padding(top = 4.dp)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(8.dp)
-                                                    .clip(CircleShape)
-                                                    .background(badgeTextColor)
-                                            )
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Text(
-                                                text = parseResult.badgeText,
-                                                color = badgeTextColor,
-                                                style = MaterialTheme.typography.labelMedium.copy(
-                                                    fontWeight = FontWeight.Bold
-                                                )
-                                            )
-                                        }
-                                    }
+                                    Icon(
+                                        imageVector = Icons.Default.WifiOff,
+                                        contentDescription = null,
+                                        tint = MutedTextGray,
+                                        modifier = Modifier.size(40.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Text(
+                                        text = "Tap Scan to discover nearby Wi-Fi networks",
+                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                            color = if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF475569),
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    )
                                 }
+                            } else {
+                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    discoveredList.forEach { item ->
+                                        val res = parseSSID(
+                                            ssid = item.ssid,
+                                            activePrefixes = activePrefixes,
+                                            hexMap = hexMap,
+                                            forceLowercase = isForceLowercaseEnabled,
+                                            strippingRules = strippingRulesList
+                                        )
 
-                                // Interactive success complement live visualizer
-                                if (parseResult.isValid) {
-                                    Card(
-                                        colors = CardDefaults.cardColors(
-                                            containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
-                                        ),
-                                        shape = RoundedCornerShape(16.dp),
-                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(top = 20.dp)
-                                    ) {
-                                        Column(
-                                            modifier = Modifier.padding(16.dp),
-                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        Surface(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(14.dp))
+                                                .clickable {
+                                                    ssidInput = item.ssid
+                                                    if (res.isValid) {
+                                                        copyToClipboard(context, res.suggestedPassword) {
+                                                            toastMessage = "Copied complement for ${item.ssid}"
+                                                            triggerVibration(context)
+                                                        }
+                                                    }
+                                                },
+                                            shape = RoundedCornerShape(14.dp),
+                                            color = if (isDarkTheme) DarkInputBg else Color(0xFFF1F5F9),
+                                            border = BorderStroke(1.dp, if (isDarkTheme) Color(0xFF3B4358) else Color(0xFFCBD5E1))
                                         ) {
                                             Row(
-                                                modifier = Modifier.fillMaxWidth(),
+                                                modifier = Modifier.padding(14.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
                                                 horizontalArrangement = Arrangement.SpaceBetween
                                             ) {
-                                                Text(
-                                                    text = "الرمز السداسي (Suffix):",
-                                                    style = MaterialTheme.typography.labelSmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                                )
-                                                Text(
-                                                    text = parseResult.hexPart.uppercase(),
-                                                    style = MaterialTheme.typography.labelSmall.copy(
-                                                        fontFamily = FontFamily.Monospace,
-                                                        fontWeight = FontWeight.Bold,
-                                                        color = MaterialTheme.colorScheme.primary
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    modifier = Modifier.weight(1f)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Wifi,
+                                                        contentDescription = null,
+                                                        tint = if (item.isConnected) Color(0xFF10B981) else SoftIndigoAccent,
+                                                        modifier = Modifier.size(20.dp)
                                                     )
-                                                )
-                                            }
-
-                                            Spacer(modifier = Modifier.height(8.dp))
-
-                                            Divider(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f))
-
-                                            Spacer(modifier = Modifier.height(10.dp))
-
-                                            Text(
-                                                text = "مكمل السداسي عشر (كلمة المرور المقترحة):",
-                                                style = MaterialTheme.typography.labelSmall.copy(
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                ),
-                                                modifier = Modifier.padding(bottom = 6.dp)
-                                            )
-
-                                            Text(
-                                                text = parseResult.suggestedPassword,
-                                                style = MaterialTheme.typography.headlineSmall.copy(
-                                                    fontFamily = FontFamily.Monospace,
-                                                    fontWeight = FontWeight.ExtraBold,
-                                                    color = MaterialTheme.colorScheme.primary,
-                                                    fontSize = 24.sp
-                                                )
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        } else {
-                            // ==========================================
-                            // 🕹️ MANUAL TRANSFORMATION CUSTOM MODE
-                            // ==========================================
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                // Header for manual mode with Undo (↩️) back arrow
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    // ↩️ Return to Auto button
-                                    TextButton(
-                                        onClick = {
-                                            selectedTab = 0
-                                            errorMessage = null
-                                            triggerVibration(context)
-                                        }
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                            contentDescription = "العودة للوضع التلقائي",
-                                            tint = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text(
-                                            text = "رجوع تلقائي",
-                                            style = MaterialTheme.typography.labelMedium.copy(
-                                                fontWeight = FontWeight.Bold,
-                                                color = MaterialTheme.colorScheme.primary
-                                            )
-                                        )
-                                    }
-
-                                    Text(
-                                        text = "الرمز السداسي (12 رمزاً فقط):",
-                                        style = MaterialTheme.typography.labelMedium.copy(
-                                            fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
-                                        )
-                                    )
-                                }
-
-                                OutlinedTextField(
-                                    value = manualInput,
-                                    onValueChange = { newValue ->
-                                        // Restrict input perfectly to hexadecimals and maximum length of 12
-                                        val filtered = newValue.uppercase().filter { it in "0123456789ABCDEF" }
-                                        manualInput = if (filtered.length > 12) filtered.take(12) else filtered
-                                        errorMessage = null
-                                    },
-                                    placeholder = {
-                                        Text(
-                                            text = "A1B2C3D4E5F6",
-                                            style = MaterialTheme.typography.bodyMedium.copy(
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                                            )
-                                        )
-                                    },
-                                    leadingIcon = {
-                                        Icon(
-                                            imageVector = Icons.Default.QrCode,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.primary
-                                        )
-                                    },
-                                    trailingIcon = {
-                                        if (manualInput.isNotEmpty()) {
-                                            IconButton(onClick = { manualInput = "" }) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Clear,
-                                                    contentDescription = "امسح الحقل",
-                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                            }
-                                        }
-                                    },
-                                    supportingText = {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween
-                                        ) {
-                                            Text(
-                                                text = "${manualInput.length}/12",
-                                                style = MaterialTheme.typography.labelSmall.copy(
-                                                    color = if (manualInput.length == 12) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                            )
-                                            Text(
-                                                text = "الحروف السداسية المدخلة فقط",
-                                                style = MaterialTheme.typography.labelSmall
-                                            )
-                                        }
-                                    },
-                                    singleLine = true,
-                                    textStyle = MaterialTheme.typography.bodyLarge.copy(
-                                        fontFamily = FontFamily.Monospace,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        textAlign = TextAlign.Center,
-                                        letterSpacing = 1.sp
-                                    ),
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        focusedBorderColor = MaterialTheme.colorScheme.primary,
-                                        unfocusedBorderColor = MaterialTheme.colorScheme.surfaceVariant,
-                                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                                        unfocusedContainerColor = Color.Transparent
-                                    ),
-                                    shape = RoundedCornerShape(16.dp),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .testTag("manual_text_field"),
-                                    keyboardOptions = KeyboardOptions(
-                                        keyboardType = KeyboardType.Ascii,
-                                        imeAction = ImeAction.Done
-                                    ),
-                                    keyboardActions = KeyboardActions(
-                                        onDone = { keyboardController?.hide() }
-                                    )
-                                )
-
-                                Spacer(modifier = Modifier.height(4.dp))
-
-                                // Quick wrapping shortcuts below manual field: (to wlan, to fh_, without prefix)
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    // Button 1: To wlan
-                                    Surface(
-                                        shape = RoundedCornerShape(12.dp),
-                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
-                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)),
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .padding(end = 4.dp)
-                                            .clickable {
-                                                if (manualInput.length == 12) {
-                                                    val complement = applyHexComplement(manualInput)
-                                                    val formatted = "wlan$complement"
-                                                    copyToClipboard(context, formatted) {
-                                                        toastMessage = "تم نسخ ببادئة wlan بنجاح! 📋"
-                                                        triggerVibration(context)
+                                                    Spacer(modifier = Modifier.width(12.dp))
+                                                    Column {
+                                                        Text(
+                                                            text = item.ssid,
+                                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                                fontWeight = FontWeight.ExtraBold,
+                                                                color = if (isDarkTheme) LightTextWhite else Color(0xFF0F172A)
+                                                            )
+                                                        )
+                                                        if (res.isValid) {
+                                                            Text(
+                                                                text = "Hex Password: ${res.suggestedPassword}",
+                                                                style = MaterialTheme.typography.labelSmall.copy(
+                                                                    fontFamily = FontFamily.Monospace,
+                                                                    color = SoftIndigoAccent,
+                                                                    fontWeight = FontWeight.Bold
+                                                                )
+                                                            )
+                                                        }
                                                     }
-                                                } else {
-                                                    triggerError("يرجى إكمال الـ 12 رمزاً أولاً لتشغيل الاختصار!")
+                                                }
+
+                                                if (res.isValid) {
+                                                    IconButton(
+                                                        onClick = {
+                                                            connectToWifiNetwork(context, item.ssid, res.suggestedPassword) {
+                                                                wifiStatusText = it
+                                                            }
+                                                        }
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.NetworkCheck,
+                                                            contentDescription = "Auto Connect",
+                                                            tint = Color(0xFF10B981)
+                                                        )
+                                                    }
                                                 }
                                             }
-                                    ) {
-                                        Text(
-                                            text = "إلى wlan 🌐",
-                                            style = MaterialTheme.typography.labelSmall.copy(
-                                                fontWeight = FontWeight.Bold,
-                                                color = MaterialTheme.colorScheme.primary
-                                            ),
-                                            textAlign = TextAlign.Center,
-                                            modifier = Modifier.padding(vertical = 8.dp)
-                                        )
-                                    }
-
-                                    // Button 2: To fh_
-                                    Surface(
-                                        shape = RoundedCornerShape(12.dp),
-                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
-                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)),
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .padding(horizontal = 4.dp)
-                                            .clickable {
-                                                if (manualInput.length >= 6) {
-                                                    // Standard fh_ takes las 6 chars of MAC/Hex complement
-                                                    val cleanInput = if (manualInput.length > 6) manualInput.takeLast(6) else manualInput
-                                                    val complement = applyHexComplement(cleanInput)
-                                                    val formatted = "fh_$complement"
-                                                    copyToClipboard(context, formatted) {
-                                                        toastMessage = "تم نسخ ببادئة fh_ بنجاح! 📋"
-                                                        triggerVibration(context)
-                                                    }
-                                                } else {
-                                                    triggerError("يرجى إدخال 6 رموز على الأقل لتهيئة بادئة fh_")
-                                                }
-                                            }
-                                    ) {
-                                        Text(
-                                            text = "إلى fh_ 📶",
-                                            style = MaterialTheme.typography.labelSmall.copy(
-                                                fontWeight = FontWeight.Bold,
-                                                color = MaterialTheme.colorScheme.primary
-                                            ),
-                                            textAlign = TextAlign.Center,
-                                            modifier = Modifier.padding(vertical = 8.dp)
-                                        )
-                                    }
-
-                                    // Button 3: No Prefix
-                                    Surface(
-                                        shape = RoundedCornerShape(12.dp),
-                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
-                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)),
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .padding(start = 4.dp)
-                                            .clickable {
-                                                if (manualInput.isNotEmpty()) {
-                                                    val complement = applyHexComplement(manualInput)
-                                                    copyToClipboard(context, complement) {
-                                                        toastMessage = "تم النسخ بدون بادئة بنجاح! 📋"
-                                                        triggerVibration(context)
-                                                    }
-                                                } else {
-                                                    triggerError("يرجى إدخال الرموز السداسية أولاً للتطبيق بنجاح")
-                                                }
-                                            }
-                                    ) {
-                                        Text(
-                                            text = "بدون بادئة 🔲",
-                                            style = MaterialTheme.typography.labelSmall.copy(
-                                                fontWeight = FontWeight.Bold,
-                                                color = MaterialTheme.colorScheme.primary
-                                            ),
-                                            textAlign = TextAlign.Center,
-                                            modifier = Modifier.padding(vertical = 8.dp)
-                                        )
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-
-                    // Interactive error box display
-                    errorMessage?.let { error ->
-                        Text(
-                            text = error,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(top = 10.dp)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(24.dp))
-
-                    // ⚡ Primary processing and Copy trigger Button
-                    Button(
-                        onClick = {
-                            keyboardController?.hide()
-                            if (selectedTab == 0) {
-                                // Auto SSID mode processing
-                                val res = parseSSID(ssidInput)
-                                if (res.isValid) {
-                                    copyToClipboard(context, res.suggestedPassword) {
-                                        toastMessage = "تم حساب كلمة المرور ونسخها فورا! 🥳📋"
-                                        triggerVibration(context)
-                                    }
-                                } else {
-                                    triggerError("صيغة SSID المدخلة غير مدعومة! يرجى التحقق من المدخلات")
-                                }
-                            } else {
-                                // Manual mode processing
-                                if (manualInput.length == 12) {
-                                    val comp = applyHexComplement(manualInput)
-                                    copyToClipboard(context, comp) {
-                                        toastMessage = "نجاح! تم تحويل المكمل لـ 12 رمزاً ونسخه! 📋"
-                                        triggerVibration(context)
-                                    }
-                                } else {
-                                    triggerError("الرمز غير مكتمل! يجب إدخال 12 رمزاً سداسياً بدقة")
-                                }
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary
-                        ),
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp)
-                            .testTag("submit_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Key,
-                            contentDescription = null,
-                            tint = Color.White
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "تحويل ونسخ المكمل الفوري ⚡",
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                        )
-                    }
                 }
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // 📡 Simulator Area: "شبكات قريبة مكتشفة" (Discovered Nearby Signals)
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 24.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
-                ),
-                shape = RoundedCornerShape(20.dp),
-                border = BorderStroke(
-                    width = 1.dp,
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
-                )
-            ) {
-                Column(
-                    modifier = Modifier.padding(20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+            } else {
+                // ==========================================
+                // MANUAL HEX MODE
+                // ==========================================
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = if (isDarkTheme) DarkCardSurface else Color.White),
+                    border = BorderStroke(1.dp, if (isDarkTheme) Color(0xFF3B4358) else Color(0xFFCBD5E1))
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.CellTower,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(24.dp)
-                        )
+                    Column(modifier = Modifier.padding(20.dp)) {
                         Text(
-                            text = "شبكات الـ Wi-Fi القريبة المكتشفة",
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontWeight = FontWeight.Bold
+                            text = "RAW HEX CODE",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.ExtraBold,
+                                color = if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF475569),
+                                letterSpacing = 1.3.sp
                             )
                         )
-                    }
 
-                    Spacer(modifier = Modifier.height(4.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
 
-                    Text(
-                        text = "ابحث عن شبكات الجوار، وبلمسة واحدة قم بتبديل وسحب النتيجة فورا للحافظة",
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            textAlign = TextAlign.Center,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                        ),
-                        modifier = Modifier.padding(horizontal = 8.dp)
-                    )
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Scan Trigger Button
-                    OutlinedButton(
-                        onClick = {
-                            coroutineScope.launch {
-                                scanLoading = true
-                                delay(1000) // 1 second standard simulations delay
-                                scanLoading = false
-                                showScanResult = true
-                                discoveredList.clear()
-                                discoveredList.addAll(
-                                    listOf(
-                                        DiscoveredWifi("fh_5c2570", 4),
-                                        DiscoveredWifi("wlan9b860f", 3),
-                                        DiscoveredWifi("fh_a340bc", 4),
-                                        DiscoveredWifi("wlan1f2d3e", 2),
-                                        DiscoveredWifi("HomeRouter_8d4e", 3),
-                                        DiscoveredWifi("fh_66e771", 4)
-                                    )
-                                )
-                                triggerVibration(context)
-                            }
-                        },
-                        border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary),
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        if (scanLoading) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.primary
+                        OutlinedTextField(
+                            value = manualHexInput,
+                            onValueChange = { manualHexInput = it },
+                            placeholder = { Text("e.g., 67f0a2", color = MutedTextGray) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodyLarge.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold
+                            ),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = SoftIndigoAccent,
+                                unfocusedBorderColor = if (isDarkTheme) Color(0xFF3B4358) else Color(0xFFCBD5E1)
                             )
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Text("جاري فحص النطاق المحيط...")
-                        } else {
+                        )
+
+                        Spacer(modifier = Modifier.height(20.dp))
+
+                        val computedHex = applyHexComplement(manualHexInput, hexMap, isForceLowercaseEnabled)
+
+                        Text(
+                            text = "COMPLEMENT OUTPUT",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.ExtraBold,
+                                color = if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF475569),
+                                letterSpacing = 1.3.sp
+                            )
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = if (computedHex.isNotBlank()) computedHex else "-",
+                            style = MaterialTheme.typography.headlineMedium.copy(
+                                fontWeight = FontWeight.ExtraBold,
+                                fontFamily = FontFamily.Monospace,
+                                color = SoftIndigoAccent,
+                                letterSpacing = 1.8.sp
+                            )
+                        )
+
+                        Spacer(modifier = Modifier.height(20.dp))
+
+                        Button(
+                            onClick = {
+                                if (computedHex.isNotBlank()) {
+                                    copyToClipboard(context, computedHex) {
+                                        toastMessage = "Copied to clipboard"
+                                        triggerVibration(context)
+                                    }
+                                }
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = SoftIndigoAccent),
+                            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp)
+                        ) {
                             Icon(
-                                imageVector = Icons.Default.Search,
-                                contentDescription = null,
+                                imageVector = Icons.Default.ContentCopy,
+                                contentDescription = "Copy",
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("البحث عن شبكات قريبة 📡")
-                        }
-                    }
-
-                    // Animated Network Listing (Slide Down)
-                    AnimatedVisibility(
-                        visible = showScanResult && !scanLoading,
-                        enter = expandVertically() + fadeIn(),
-                        exit = shrinkVertically() + fadeOut()
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 16.dp)
-                        ) {
-                            discoveredList.forEach { wifi ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 6.dp)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
-                                        .clickable {
-                                            // One-tap Action: Set SSID in input field, process complements, copy, Vibrate and Toast!
-                                            selectedTab = 0
-                                            ssidInput = wifi.ssid
-                                            
-                                            val prs = parseSSID(wifi.ssid)
-                                            if (prs.isValid) {
-                                                copyToClipboard(context, prs.suggestedPassword) {
-                                                    toastMessage = "تم سحب ${wifi.ssid}، مكملها: ${prs.suggestedPassword} منسوخ! ⚡📋"
-                                                    triggerVibration(context)
-                                                }
-                                            } else {
-                                                // For non-standard networks
-                                                toastMessage = "تم اختيار ${wifi.ssid} ولكن مكملها يحتاج تحقيق صيغة ⚠️"
-                                                triggerVibration(context)
-                                            }
-                                        }
-                                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    // Left side Action Button
-                                    Button(
-                                        onClick = {
-                                            selectedTab = 0
-                                            ssidInput = wifi.ssid
-                                            val prs = parseSSID(wifi.ssid)
-                                            if (prs.isValid) {
-                                                copyToClipboard(context, prs.suggestedPassword) {
-                                                    toastMessage = "تم سحب ${wifi.ssid} ومكملها منسوخ! ⚡📋"
-                                                    triggerVibration(context)
-                                                }
-                                            } else {
-                                                toastMessage = "تم سحب ${wifi.ssid} للتجربة! 📡"
-                                                triggerVibration(context)
-                                            }
-                                        },
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                                            contentColor = MaterialTheme.colorScheme.primary
-                                        ),
-                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                                        shape = RoundedCornerShape(10.dp),
-                                        modifier = Modifier.height(32.dp)
-                                    ) {
-                                        Text(
-                                            text = "تبديل ⚡",
-                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
-                                        )
-                                    }
-
-                                    // Right side Network description
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.End
-                                    ) {
-                                        Column(
-                                            horizontalAlignment = Alignment.End,
-                                            modifier = Modifier.padding(end = 10.dp)
-                                        ) {
-                                            Text(
-                                                text = wifi.ssid,
-                                                style = MaterialTheme.typography.bodyMedium.copy(
-                                                    fontWeight = FontWeight.Bold,
-                                                    fontFamily = FontFamily.Monospace,
-                                                    textDirection = TextDirection.Ltr
-                                                )
-                                            )
-                                            Text(
-                                                text = if (parseSSID(wifi.ssid).isValid) "موافق للتشفير التلقائي" else "نطاق عام غير مرمز",
-                                                style = MaterialTheme.typography.labelSmall.copy(
-                                                    color = if (parseSSID(wifi.ssid).isValid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
-                                                ),
-                                                fontSize = 10.sp
-                                            )
-                                        }
-
-                                        // Signal Strength indicator icon
-                                        Icon(
-                                            imageVector = when (wifi.signalStrength) {
-                                                4 -> Icons.Default.Wifi
-                                                3 -> Icons.Default.NetworkWifi3Bar
-                                                2 -> Icons.Default.NetworkWifi2Bar
-                                                else -> Icons.Default.NetworkWifi1Bar
-                                            },
-                                            contentDescription = "قوة الإشارة",
-                                            tint = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
-                                }
-                            }
+                            Text("Copy Complement", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.ExtraBold))
                         }
                     }
                 }
             }
         }
 
-        // 📋 Floating Custom Overlay Action Toast (Beautiful Material 3 styling alert)
-        AnimatedVisibility(
-            visible = toastMessage != null,
-            enter = slideInVertically(initialOffsetY = { it / 2 }) + fadeIn(),
-            exit = slideOutVertically(targetOffsetY = { it / 2 }) + fadeOut(),
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 40.dp)
-        ) {
-            toastMessage?.let { msg ->
+        AnimatedVisibility(visible = toastMessage != null) {
+            Column {
+                Spacer(modifier = Modifier.height(16.dp))
                 Surface(
-                    color = if (msg.contains("نجاح") || msg.contains("تم")) Color(0xFF047857) else Color(0xFFDC2626),
-                    tonalElevation = 8.dp,
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier
-                        .padding(horizontal = 24.dp)
-                        .shadow(16.dp, RoundedCornerShape(16.dp))
+                    color = SoftIndigoAccent,
+                    shape = RoundedCornerShape(20.dp)
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp)
                     ) {
                         Icon(
-                            imageVector = if (msg.contains("نجاح") || msg.contains("تم")) Icons.Default.CheckCircle else Icons.Default.Info,
+                            imageVector = Icons.Default.Check,
                             contentDescription = null,
                             tint = Color.White,
-                            modifier = Modifier.size(20.dp)
+                            modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = msg,
+                            text = toastMessage ?: "",
                             color = Color.White,
                             style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
                         )
@@ -1272,5 +1291,566 @@ fun RouterAssistantScreen(
                 }
             }
         }
+    }
+}
+
+// SETTINGS SCREEN
+@Composable
+fun SettingsScreen(
+    isForceLowercaseEnabled: Boolean,
+    onToggleForceLowercase: (Boolean) -> Unit,
+    hexPairsList: List<HexPairItem>,
+    onUpdateHexPairs: (List<HexPairItem>) -> Unit,
+    prefixesList: List<PrefixItem>,
+    onUpdatePrefixes: (List<PrefixItem>) -> Unit,
+    strippingRulesList: List<StrippingRuleItem>,
+    onUpdateStrippingRules: (List<StrippingRuleItem>) -> Unit,
+    isDarkTheme: Boolean
+) {
+    val context = LocalContext.current
+
+    var editingHexPair by remember { mutableStateOf<HexPairItem?>(null) }
+    var showAddHexPairDialog by remember { mutableStateOf(false) }
+
+    var editingPrefix by remember { mutableStateOf<PrefixItem?>(null) }
+    var showAddPrefixDialog by remember { mutableStateOf(false) }
+
+    var editingStrippingRule by remember { mutableStateOf<StrippingRuleItem?>(null) }
+    var showAddStrippingRuleDialog by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp)
+    ) {
+        // OUTPUT Section
+        Column {
+            Text(
+                text = "OUTPUT",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontWeight = FontWeight.ExtraBold,
+                    color = if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF475569),
+                    letterSpacing = 1.3.sp
+                ),
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = if (isDarkTheme) DarkCardSurface else Color.White),
+                border = BorderStroke(1.dp, if (isDarkTheme) Color(0xFF3B4358) else Color(0xFFCBD5E1))
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.TextFields,
+                            contentDescription = null,
+                            tint = SoftIndigoAccent,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Column {
+                            Text(
+                                text = "Force Lowercase",
+                                style = MaterialTheme.typography.titleSmall.copy(
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = if (isDarkTheme) LightTextWhite else Color(0xFF0F172A)
+                                )
+                            )
+                            Text(
+                                text = "Convert all hex output to lowercase",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.Medium,
+                                    color = if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF64748B)
+                                )
+                            )
+                        }
+                    }
+
+                    Switch(
+                        checked = isForceLowercaseEnabled,
+                        onCheckedChange = {
+                            onToggleForceLowercase(it)
+                            triggerVibration(context)
+                        },
+                        colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = SoftIndigoAccent)
+                    )
+                }
+            }
+        }
+
+        // HEX COMPLEMENT MAP Section
+        Column {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "HEX COMPLEMENT MAP",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontWeight = FontWeight.ExtraBold,
+                        color = if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF475569),
+                        letterSpacing = 1.3.sp
+                    )
+                )
+
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    IconButton(onClick = { showAddHexPairDialog = true }) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "Add Pair",
+                            tint = SoftIndigoAccent
+                        )
+                    }
+                    IconButton(
+                        onClick = {
+                            val def = AppPreferencesRepository.getDefaultHexPairsList()
+                            onUpdateHexPairs(def)
+                            triggerVibration(context)
+                        }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Reset Map",
+                            tint = SoftIndigoAccent
+                        )
+                    }
+                }
+            }
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = if (isDarkTheme) DarkCardSurface else Color.White),
+                border = BorderStroke(1.dp, if (isDarkTheme) Color(0xFF3B4358) else Color(0xFFCBD5E1))
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp)
+                ) {
+                    hexPairsList.forEachIndexed { idx, pair ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "${pair.keyChar}  ↔  ${pair.valChar}",
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = SoftIndigoAccent
+                                )
+                            )
+
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Switch(
+                                    checked = pair.isEnabled,
+                                    onCheckedChange = { checked ->
+                                        val updated = hexPairsList.map {
+                                            if (it.id == pair.id) it.copy(isEnabled = checked) else it
+                                        }
+                                        onUpdateHexPairs(updated)
+                                        triggerVibration(context)
+                                    },
+                                    colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = SoftIndigoAccent)
+                                )
+
+                                IconButton(onClick = { editingHexPair = pair }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Edit,
+                                        contentDescription = "Edit",
+                                        tint = MutedTextGray,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = {
+                                        val updated = hexPairsList.filter { it.id != pair.id }
+                                        onUpdateHexPairs(updated)
+                                        triggerVibration(context)
+                                    }
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = "Delete",
+                                        tint = ErrorTagText,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        if (idx < hexPairsList.size - 1) {
+                            HorizontalDivider(color = if (isDarkTheme) Color(0xFF3B4358) else Color(0xFFE2E8F0))
+                        }
+                    }
+                }
+            }
+        }
+
+        // CHARACTER STRIPPING RULES Section
+        Column {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "CHARACTER STRIPPING RULES",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontWeight = FontWeight.ExtraBold,
+                        color = if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF475569),
+                        letterSpacing = 1.3.sp
+                    )
+                )
+
+                IconButton(onClick = { showAddStrippingRuleDialog = true }) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = "Add Rule",
+                        tint = SoftIndigoAccent
+                    )
+                }
+            }
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = if (isDarkTheme) DarkCardSurface else Color.White),
+                border = BorderStroke(1.dp, if (isDarkTheme) Color(0xFF3B4358) else Color(0xFFCBD5E1))
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp)
+                ) {
+                    strippingRulesList.forEachIndexed { idx, rule ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = rule.pattern,
+                                style = MaterialTheme.typography.bodyLarge.copy(
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = if (isDarkTheme) LightTextWhite else Color(0xFF0F172A)
+                                )
+                            )
+
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Switch(
+                                    checked = rule.isEnabled,
+                                    onCheckedChange = { checked ->
+                                        val updated = strippingRulesList.map {
+                                            if (it.id == rule.id) it.copy(isEnabled = checked) else it
+                                        }
+                                        onUpdateStrippingRules(updated)
+                                        triggerVibration(context)
+                                    },
+                                    colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = SoftIndigoAccent)
+                                )
+
+                                IconButton(onClick = { editingStrippingRule = rule }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Edit,
+                                        contentDescription = "Edit",
+                                        tint = MutedTextGray,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = {
+                                        val updated = strippingRulesList.filter { it.id != rule.id }
+                                        onUpdateStrippingRules(updated)
+                                        triggerVibration(context)
+                                    }
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = "Delete",
+                                        tint = ErrorTagText,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        if (idx < strippingRulesList.size - 1) {
+                            HorizontalDivider(color = if (isDarkTheme) Color(0xFF3B4358) else Color(0xFFE2E8F0))
+                        }
+                    }
+                }
+            }
+        }
+
+        // NETWORK PREFIXES Section
+        Column {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "NETWORK PREFIXES",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontWeight = FontWeight.ExtraBold,
+                        color = if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF475569),
+                        letterSpacing = 1.3.sp
+                    )
+                )
+
+                IconButton(onClick = { showAddPrefixDialog = true }) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = "Add Prefix",
+                        tint = SoftIndigoAccent
+                    )
+                }
+            }
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = if (isDarkTheme) DarkCardSurface else Color.White),
+                border = BorderStroke(1.dp, if (isDarkTheme) Color(0xFF3B4358) else Color(0xFFCBD5E1))
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp)
+                ) {
+                    prefixesList.forEachIndexed { idx, item ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = item.prefix,
+                                style = MaterialTheme.typography.bodyLarge.copy(
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = if (isDarkTheme) LightTextWhite else Color(0xFF0F172A)
+                                )
+                            )
+
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Switch(
+                                    checked = item.isEnabled,
+                                    onCheckedChange = { checked ->
+                                        val updated = prefixesList.map {
+                                            if (it.id == item.id) it.copy(isEnabled = checked) else it
+                                        }
+                                        onUpdatePrefixes(updated)
+                                        triggerVibration(context)
+                                    },
+                                    colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = SoftIndigoAccent)
+                                )
+
+                                IconButton(onClick = { editingPrefix = item }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Edit,
+                                        contentDescription = "Edit",
+                                        tint = MutedTextGray,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = {
+                                        val updated = prefixesList.filter { it.id != item.id }
+                                        onUpdatePrefixes(updated)
+                                        triggerVibration(context)
+                                    }
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = "Delete",
+                                        tint = ErrorTagText,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        if (idx < prefixesList.size - 1) {
+                            HorizontalDivider(color = if (isDarkTheme) Color(0xFF3B4358) else Color(0xFFE2E8F0))
+                        }
+                    }
+                }
+            }
+        }
+
+        // ABOUT Section
+        Column {
+            Text(
+                text = "ABOUT",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontWeight = FontWeight.ExtraBold,
+                    color = if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF475569),
+                    letterSpacing = 1.3.sp
+                ),
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = if (isDarkTheme) DarkCardSurface else Color.White),
+                border = BorderStroke(1.dp, if (isDarkTheme) Color(0xFF3B4358) else Color(0xFFCBD5E1))
+            ) {
+                Column(modifier = Modifier.padding(20.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "xei5h",
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.ExtraBold,
+                                color = if (isDarkTheme) LightTextWhite else Color(0xFF0F172A)
+                            )
+                        )
+                        Text(
+                            text = "Wi-Fi Hex Complement Utility",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF64748B)
+                            )
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Text(
+                        text = "Default map: 0 ↔ f  1 ↔ e  2 ↔ d  3 ↔ c  4 ↔ b  5 ↔ a  6 ↔ 9  7 ↔ 8",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            color = if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF475569),
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            lineHeight = 18.sp
+                        )
+                    )
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Text(
+                        text = "Case is preserved unless force lowercase is enabled. All settings are stored locally on device.",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            color = if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF475569),
+                            fontWeight = FontWeight.Medium,
+                            lineHeight = 18.sp
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    // Dialogs
+    if (showAddHexPairDialog) {
+        EditHexPairDialog(
+            initialKey = null,
+            initialValue = null,
+            onDismiss = { showAddHexPairDialog = false },
+            onSave = { k, v ->
+                val newItem = HexPairItem(keyChar = k, valChar = v, isEnabled = true)
+                onUpdateHexPairs(hexPairsList + newItem)
+                showAddHexPairDialog = false
+            }
+        )
+    }
+
+    if (editingHexPair != null) {
+        EditHexPairDialog(
+            initialKey = editingHexPair!!.keyChar,
+            initialValue = editingHexPair!!.valChar,
+            onDismiss = { editingHexPair = null },
+            onSave = { k, v ->
+                val updated = hexPairsList.map {
+                    if (it.id == editingHexPair!!.id) it.copy(keyChar = k, valChar = v) else it
+                }
+                onUpdateHexPairs(updated)
+                editingHexPair = null
+            }
+        )
+    }
+
+    if (showAddPrefixDialog) {
+        EditItemStringDialog(
+            title = "Add Network Prefix",
+            initialValue = "",
+            placeholder = "e.g., WLAN_",
+            onDismiss = { showAddPrefixDialog = false },
+            onSave = { str ->
+                onUpdatePrefixes(prefixesList + PrefixItem(prefix = str, isEnabled = true))
+                showAddPrefixDialog = false
+            }
+        )
+    }
+
+    if (editingPrefix != null) {
+        EditItemStringDialog(
+            title = "Edit Network Prefix",
+            initialValue = editingPrefix!!.prefix,
+            placeholder = "e.g., WLAN_",
+            onDismiss = { editingPrefix = null },
+            onSave = { str ->
+                val updated = prefixesList.map {
+                    if (it.id == editingPrefix!!.id) it.copy(prefix = str) else it
+                }
+                onUpdatePrefixes(updated)
+                editingPrefix = null
+            }
+        )
+    }
+
+    if (showAddStrippingRuleDialog) {
+        EditItemStringDialog(
+            title = "Add Stripping Rule",
+            initialValue = "",
+            placeholder = "e.g., _5g or #",
+            onDismiss = { showAddStrippingRuleDialog = false },
+            onSave = { str ->
+                onUpdateStrippingRules(strippingRulesList + StrippingRuleItem(pattern = str, isEnabled = true))
+                showAddStrippingRuleDialog = false
+            }
+        )
+    }
+
+    if (editingStrippingRule != null) {
+        EditItemStringDialog(
+            title = "Edit Stripping Rule",
+            initialValue = editingStrippingRule!!.pattern,
+            placeholder = "e.g., _5g or #",
+            onDismiss = { editingStrippingRule = null },
+            onSave = { str ->
+                val updated = strippingRulesList.map {
+                    if (it.id == editingStrippingRule!!.id) it.copy(pattern = str) else it
+                }
+                onUpdateStrippingRules(updated)
+                editingStrippingRule = null
+            }
+        )
     }
 }
