@@ -4,16 +4,23 @@ import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.location.LocationManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
+import android.net.wifi.WifiNetworkSpecifier
+import android.net.wifi.WifiNetworkSuggestion
 import android.os.Build
 import android.os.Bundle
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.os.VibrationEffect
+import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -120,12 +127,31 @@ data class DiscoveredWifi(
 fun hasWifiPermissions(context: Context): Boolean {
     val hasFine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
     val hasCoarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+    val hasChangeWifi = ContextCompat.checkSelfPermission(context, Manifest.permission.CHANGE_WIFI_STATE) == PackageManager.PERMISSION_GRANTED
     val hasNearby = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         ContextCompat.checkSelfPermission(context, Manifest.permission.NEARBY_WIFI_DEVICES) == PackageManager.PERMISSION_GRANTED
     } else {
         true
     }
-    return (hasFine || hasCoarse) && hasNearby
+    return (hasFine || hasCoarse) && hasChangeWifi && hasNearby
+}
+
+// Helper: Check Location Services (GPS)
+fun isLocationServicesEnabled(context: Context): Boolean {
+    val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return false
+    return try {
+        locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
+        locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+    } catch (_: Exception) {
+        false
+    }
+}
+
+// Helper: Check Explicit Connect Permissions
+fun hasConnectPermissions(context: Context): Boolean {
+    val hasFine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+    val hasChangeWifi = ContextCompat.checkSelfPermission(context, Manifest.permission.CHANGE_WIFI_STATE) == PackageManager.PERMISSION_GRANTED
+    return hasFine && hasChangeWifi
 }
 
 // Helper: Get Connected WiFi SSID
@@ -334,28 +360,113 @@ fun parseSSID(
     )
 }
 
-// Auto-Connect to Wi-Fi
-fun connectToWifiNetwork(
+// Fallback Wi-Fi Suggestion for Android 10+
+fun tryWifiNetworkSuggestionFallback(
     context: Context,
     ssid: String,
     password: String,
     onStatusUpdate: (String) -> Unit
 ) {
-    onStatusUpdate("Connecting...")
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        if (wifiManager != null) {
+            try {
+                val suggestionBuilder = WifiNetworkSuggestion.Builder()
+                    .setSsid(ssid)
+                    .setIsAppInteractionRequired(false)
+
+                if (password.isNotBlank()) {
+                    try {
+                        suggestionBuilder.setWpa2Passphrase(password)
+                    } catch (_: Exception) {}
+                }
+
+                val suggestion = suggestionBuilder.build()
+                val status = wifiManager.addNetworkSuggestions(listOf(suggestion))
+
+                if (status == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS) {
+                    onStatusUpdate("Wi-Fi suggestion registered for '$ssid'. System will auto-connect.")
+                } else {
+                    onStatusUpdate("Connection Failed (Suggestion code: $status)")
+                }
+            } catch (e: Exception) {
+                onStatusUpdate("Connection Failed: ${e.localizedMessage}")
+            }
+        } else {
+            onStatusUpdate("Wi-Fi Manager unavailable")
+        }
+    } else {
+        onStatusUpdate("Connection Failed")
+    }
+}
+
+// Auto-Connect to Wi-Fi with Permissions, GPS Check, Clipboard Backup, and Dual Mechanism
+fun connectToWifiNetwork(
+    context: Context,
+    ssid: String,
+    password: String,
+    onRequestPermissions: (() -> Unit)? = null,
+    onStatusUpdate: (String) -> Unit
+) {
+    // 1. User Feedback & Clipboard Backup: Copy password to Clipboard & display Toast
+    copyToClipboard(context, password) {}
+    Toast.makeText(context, "Password copied & connection requested", Toast.LENGTH_SHORT).show()
+
+    // 2. Enforce Runtime Permissions (ACCESS_FINE_LOCATION & CHANGE_WIFI_STATE)
+    if (!hasConnectPermissions(context)) {
+        if (onRequestPermissions != null) {
+            onRequestPermissions()
+        } else {
+            Toast.makeText(
+                context,
+                "Please grant Location and Wi-Fi permissions in Settings to connect.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+        onStatusUpdate("Missing permissions (Location & Wi-Fi State)")
+        return
+    }
+
+    // 3. Verify Location Services (GPS)
+    if (!isLocationServicesEnabled(context)) {
+        Toast.makeText(
+            context,
+            "Location Services (GPS) are turned off. Please enable GPS.",
+            Toast.LENGTH_LONG
+        ).show()
+        try {
+            val intent = Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(intent)
+        } catch (_: Exception) {}
+        onStatusUpdate("Location Services (GPS) turned off")
+        return
+    }
+
+    onStatusUpdate("Connecting to $ssid...")
+
     val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
     if (connectivityManager == null) {
-        onStatusUpdate("Connection Failed")
+        onStatusUpdate("ConnectivityManager unavailable")
         return
     }
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        // Modern Android Connection Logic (Android 10+ / API 29+)
         try {
-            val specifier = android.net.wifi.WifiNetworkSpecifier.Builder()
+            val specifierBuilder = WifiNetworkSpecifier.Builder()
                 .setSsid(ssid)
-                .setWpa2Passphrase(password)
-                .build()
 
-            val request = android.net.NetworkRequest.Builder()
+            if (password.isNotBlank()) {
+                try {
+                    specifierBuilder.setWpa2Passphrase(password)
+                } catch (_: Exception) {}
+            }
+
+            val specifier = specifierBuilder.build()
+
+            val request = NetworkRequest.Builder()
                 .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
                 .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
                 .setNetworkSpecifier(specifier)
@@ -363,32 +474,45 @@ fun connectToWifiNetwork(
 
             val callback = object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: android.net.Network) {
-                    try { connectivityManager.bindProcessToNetwork(network) } catch (_: Exception) {}
-                    onStatusUpdate("Connected successfully")
+                    try {
+                        connectivityManager.bindProcessToNetwork(network)
+                    } catch (_: Exception) {}
+                    onStatusUpdate("Connected successfully to $ssid")
                 }
 
                 override fun onUnavailable() {
-                    onStatusUpdate("Connection Failed")
+                    // Fallback to WifiNetworkSuggestion
+                    tryWifiNetworkSuggestionFallback(context, ssid, password, onStatusUpdate)
                 }
 
                 override fun onLost(network: android.net.Network) {
-                    onStatusUpdate("Disconnected")
+                    onStatusUpdate("Disconnected from $ssid")
                 }
             }
 
-            connectivityManager.requestNetwork(request, callback, 15000)
-        } catch (_: Exception) {
-            onStatusUpdate("Connection Failed")
+            connectivityManager.requestNetwork(request, callback, 20000)
+        } catch (e: Exception) {
+            // Fallback mechanism using WifiNetworkSuggestion.Builder
+            tryWifiNetworkSuggestionFallback(context, ssid, password, onStatusUpdate)
         }
     } else {
+        // Legacy WifiManager.addNetwork() approach for devices below Android 10
         @Suppress("DEPRECATION")
         val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
         if (wifiManager != null) {
             try {
+                if (!wifiManager.isWifiEnabled) {
+                    @Suppress("DEPRECATION")
+                    wifiManager.isWifiEnabled = true
+                }
                 @Suppress("DEPRECATION")
                 val wifiConfig = android.net.wifi.WifiConfiguration().apply {
                     SSID = "\"$ssid\""
-                    preSharedKey = "\"$password\""
+                    if (password.isNotBlank()) {
+                        preSharedKey = "\"$password\""
+                    } else {
+                        allowedKeyManagement.set(android.net.wifi.WifiConfiguration.KeyMgmt.NONE)
+                    }
                 }
                 @Suppress("DEPRECATION")
                 val netId = wifiManager.addNetwork(wifiConfig)
@@ -399,15 +523,15 @@ fun connectToWifiNetwork(
                     wifiManager.enableNetwork(netId, true)
                     @Suppress("DEPRECATION")
                     wifiManager.reconnect()
-                    onStatusUpdate("Connected successfully")
+                    onStatusUpdate("Connected successfully to $ssid")
                 } else {
                     onStatusUpdate("Connection Failed")
                 }
-            } catch (_: Exception) {
-                onStatusUpdate("Connection Failed")
+            } catch (e: Exception) {
+                onStatusUpdate("Connection Failed: ${e.localizedMessage}")
             }
         } else {
-            onStatusUpdate("Connection Failed")
+            onStatusUpdate("Wi-Fi Manager unavailable")
         }
     }
 }
@@ -697,12 +821,14 @@ fun ConvertScreen(
             arrayOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,
                 Manifest.permission.ACCESS_COARSE_LOCATION,
+                Manifest.permission.CHANGE_WIFI_STATE,
                 Manifest.permission.NEARBY_WIFI_DEVICES
             )
         } else {
             arrayOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_COARSE_LOCATION
+                Manifest.permission.ACCESS_COARSE_LOCATION,
+                Manifest.permission.CHANGE_WIFI_STATE
             )
         }
     }
@@ -967,7 +1093,10 @@ fun ConvertScreen(
                                             connectToWifiNetwork(
                                                 context = context,
                                                 ssid = ssidInput,
-                                                password = parseResult.suggestedPassword
+                                                password = parseResult.suggestedPassword,
+                                                onRequestPermissions = {
+                                                    permissionLauncher.launch(requiredPermissions)
+                                                }
                                             ) { status ->
                                                 wifiStatusText = status
                                             }
@@ -1161,8 +1290,15 @@ fun ConvertScreen(
                                                 if (res.isValid) {
                                                     IconButton(
                                                         onClick = {
-                                                            connectToWifiNetwork(context, item.ssid, res.suggestedPassword) {
-                                                                wifiStatusText = it
+                                                            connectToWifiNetwork(
+                                                                context = context,
+                                                                ssid = item.ssid,
+                                                                password = res.suggestedPassword,
+                                                                onRequestPermissions = {
+                                                                    permissionLauncher.launch(requiredPermissions)
+                                                                }
+                                                            ) { status ->
+                                                                wifiStatusText = status
                                                             }
                                                         }
                                                     ) {
