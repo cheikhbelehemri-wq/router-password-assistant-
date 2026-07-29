@@ -1180,51 +1180,58 @@ fun ConvertScreen(
                                     )
                                 )
                                 Spacer(modifier = Modifier.height(16.dp))
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Button(
-                                        onClick = {
-                                            copyToClipboard(context, parseResult.suggestedPassword) {
-                                                toastMessage = "Password copied to clipboard"
-                                                triggerVibration(context)
-                                            }
-                                        },
-                                        shape = RoundedCornerShape(12.dp),
-                                        colors = ButtonDefaults.buttonColors(containerColor = SoftIndigoAccent),
-                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)
+                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Default.ContentCopy,
-                                            contentDescription = "Copy",
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Copy", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.ExtraBold))
-                                    }
-
-                                    Button(
-                                        onClick = {
-                                            connectToWifiNetwork(
-                                                context = context,
-                                                ssid = ssidInput,
-                                                password = parseResult.suggestedPassword,
-                                                onRequestPermissions = {
-                                                    permissionLauncher.launch(requiredPermissions)
+                                        Button(
+                                            onClick = {
+                                                copyToClipboard(context, parseResult.suggestedPassword) {
+                                                    toastMessage = "Password copied to clipboard"
+                                                    triggerVibration(context)
                                                 }
-                                            ) { status ->
-                                                wifiStatusText = status
-                                            }
-                                        },
-                                        shape = RoundedCornerShape(12.dp),
-                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
-                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.NetworkCheck,
-                                            contentDescription = "Auto Connect",
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Auto-Connect", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.ExtraBold))
+                                            },
+                                            modifier = Modifier.weight(1f),
+                                            shape = RoundedCornerShape(12.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = SoftIndigoAccent),
+                                            contentPadding = PaddingValues(vertical = 12.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.ContentCopy,
+                                                contentDescription = "Copy",
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("Copy", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.ExtraBold))
+                                        }
+
+                                        Button(
+                                            onClick = {
+                                                connectToWifiNetwork(
+                                                    context = context,
+                                                    ssid = ssidInput,
+                                                    password = parseResult.suggestedPassword,
+                                                    onRequestPermissions = {
+                                                        permissionLauncher.launch(requiredPermissions)
+                                                    }
+                                                ) { status ->
+                                                    wifiStatusText = status
+                                                }
+                                            },
+                                            modifier = Modifier.weight(1f),
+                                            shape = RoundedCornerShape(12.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                                            contentPadding = PaddingValues(vertical = 12.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.NetworkCheck,
+                                                contentDescription = "Auto Connect",
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("Connect", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.ExtraBold))
+                                        }
                                     }
 
                                     OutlinedButton(
@@ -1236,9 +1243,11 @@ fun ConvertScreen(
                                                 wifiStatusText = status
                                             }
                                         },
+                                        modifier = Modifier.fillMaxWidth(),
                                         shape = RoundedCornerShape(12.dp),
-                                        border = BorderStroke(1.dp, Color(0xFFEF4444)),
-                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp)
+                                        border = BorderStroke(1.5.dp, Color(0xFFEF4444)),
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFEF4444)),
+                                        contentPadding = PaddingValues(vertical = 12.dp)
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.WifiOff,
@@ -1246,9 +1255,9 @@ fun ConvertScreen(
                                             tint = Color(0xFFEF4444),
                                             modifier = Modifier.size(18.dp)
                                         )
-                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
                                         Text(
-                                            "Forget",
+                                            "Forget Network",
                                             style = MaterialTheme.typography.labelLarge.copy(
                                                 fontWeight = FontWeight.ExtraBold,
                                                 color = Color(0xFFEF4444)
