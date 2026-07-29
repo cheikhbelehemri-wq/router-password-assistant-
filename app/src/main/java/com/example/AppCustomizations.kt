@@ -23,11 +23,14 @@ import java.util.UUID
 // 1. DATA MODELS
 // ==========================================
 
-data class PrefixItem(
+data class PrefixPairItem(
     val id: String = UUID.randomUUID().toString(),
-    val prefix: String,
+    val inputPrefix: String,
+    val outputPrefix: String,
     val isEnabled: Boolean = true
 )
+
+typealias PrefixItem = PrefixPairItem
 
 data class StrippingRuleItem(
     val id: String = UUID.randomUUID().toString(),
@@ -76,14 +79,16 @@ object AppPreferencesRepository {
         )
     }
 
-    // Default Network Prefixes (fh_, WLAN_, wifi_)
-    fun getDefaultPrefixes(): List<PrefixItem> {
+    // Default Network Prefix Pairs (fh_ ↔ wlan, WLAN_ ↔ fh_, wifi_ ↔ wlan_)
+    fun getDefaultPrefixPairs(): List<PrefixPairItem> {
         return listOf(
-            PrefixItem(prefix = "fh_", isEnabled = true),
-            PrefixItem(prefix = "WLAN_", isEnabled = true),
-            PrefixItem(prefix = "wifi_", isEnabled = true)
+            PrefixPairItem(inputPrefix = "fh_", outputPrefix = "wlan", isEnabled = true),
+            PrefixPairItem(inputPrefix = "WLAN_", outputPrefix = "fh_", isEnabled = true),
+            PrefixPairItem(inputPrefix = "wifi_", outputPrefix = "wlan_", isEnabled = true)
         )
     }
+
+    fun getDefaultPrefixes(): List<PrefixPairItem> = getDefaultPrefixPairs()
 
     // Default Stripping Rules (#, _5g, etc.)
     fun getDefaultStrippingRules(): List<StrippingRuleItem> {
@@ -162,37 +167,79 @@ object AppPreferencesRepository {
     }
 
     // Prefixes Persistence
-    fun getPrefixes(context: Context): List<PrefixItem> {
-        val jsonString = getPrefs(context).getString("prefixes_json", null) ?: return getDefaultPrefixes()
+    fun getPrefixes(context: Context): List<PrefixPairItem> {
+        val jsonString = getPrefs(context).getString("prefix_pairs_json_v2", null)
+        if (jsonString == null) {
+            val legacyJson = getPrefs(context).getString("prefixes_json", null)
+            if (legacyJson != null) {
+                try {
+                    val array = JSONArray(legacyJson)
+                    val list = mutableListOf<PrefixPairItem>()
+                    for (i in 0 until array.length()) {
+                        val obj = array.getJSONObject(i)
+                        val inP = obj.optString("inputPrefix", obj.optString("prefix", ""))
+                        val outP = obj.optString("outputPrefix", getDefaultOutputForInput(inP))
+                        if (inP.isNotEmpty()) {
+                            list.add(
+                                PrefixPairItem(
+                                    id = obj.optString("id", UUID.randomUUID().toString()),
+                                    inputPrefix = inP,
+                                    outputPrefix = outP,
+                                    isEnabled = obj.optBoolean("isEnabled", true)
+                                )
+                            )
+                        }
+                    }
+                    if (list.isNotEmpty()) return list
+                } catch (_: Exception) {}
+            }
+            return getDefaultPrefixPairs()
+        }
+
         return try {
             val array = JSONArray(jsonString)
-            val list = mutableListOf<PrefixItem>()
+            val list = mutableListOf<PrefixPairItem>()
             for (i in 0 until array.length()) {
                 val obj = array.getJSONObject(i)
-                list.add(
-                    PrefixItem(
-                        id = obj.optString("id", UUID.randomUUID().toString()),
-                        prefix = obj.getString("prefix"),
-                        isEnabled = obj.optBoolean("isEnabled", true)
+                val inP = obj.optString("inputPrefix", obj.optString("prefix", ""))
+                val outP = obj.optString("outputPrefix", "")
+                if (inP.isNotEmpty()) {
+                    list.add(
+                        PrefixPairItem(
+                            id = obj.optString("id", UUID.randomUUID().toString()),
+                            inputPrefix = inP,
+                            outputPrefix = outP,
+                            isEnabled = obj.optBoolean("isEnabled", true)
+                        )
                     )
-                )
+                }
             }
-            if (list.isEmpty()) getDefaultPrefixes() else list
+            if (list.isEmpty()) getDefaultPrefixPairs() else list
         } catch (_: Exception) {
-            getDefaultPrefixes()
+            getDefaultPrefixPairs()
         }
     }
 
-    fun savePrefixes(context: Context, list: List<PrefixItem>) {
+    private fun getDefaultOutputForInput(inP: String): String {
+        return when {
+            inP.equals("fh_", ignoreCase = true) -> "wlan"
+            inP.equals("WLAN_", ignoreCase = true) -> "fh_"
+            inP.equals("wifi_", ignoreCase = true) -> "wlan_"
+            else -> inP
+        }
+    }
+
+    fun savePrefixes(context: Context, list: List<PrefixPairItem>) {
         val array = JSONArray()
         list.forEach { item ->
             val obj = JSONObject()
             obj.put("id", item.id)
-            obj.put("prefix", item.prefix)
+            obj.put("inputPrefix", item.inputPrefix)
+            obj.put("outputPrefix", item.outputPrefix)
             obj.put("isEnabled", item.isEnabled)
             array.put(obj)
         }
-        getPrefs(context).edit().putString("prefixes_json", array.toString()).apply()
+        getPrefs(context).edit().putString("prefix_pairs_json_v2", array.toString()).apply()
     }
 
     // Stripping Rules Persistence
@@ -364,6 +411,90 @@ fun EditItemStringDialog(
                     val clean = textValue.trim()
                     if (clean.isNotEmpty()) {
                         onSave(clean)
+                    }
+                },
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = SoftIndigoAccent)
+            ) {
+                Text("Save", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", style = MaterialTheme.typography.labelLarge.copy(color = MutedTextGray))
+            }
+        }
+    )
+}
+
+@Composable
+fun EditPrefixPairDialog(
+    initialInput: String?,
+    initialOutput: String?,
+    onDismiss: () -> Unit,
+    onSave: (String, String) -> Unit
+) {
+    var inputText by remember { mutableStateOf(initialInput ?: "") }
+    var outputText by remember { mutableStateOf(initialOutput ?: "") }
+    var errorMsg by remember { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(20.dp),
+        title = {
+            Text(
+                text = if (initialInput != null) "Edit Prefix Pair" else "Add Prefix Pair",
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = inputText,
+                    onValueChange = { inputText = it },
+                    label = { Text("Input Prefix") },
+                    placeholder = { Text("e.g. fh_") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold
+                    )
+                )
+                OutlinedTextField(
+                    value = outputText,
+                    onValueChange = { outputText = it },
+                    label = { Text("Target Output Prefix") },
+                    placeholder = { Text("e.g. wlan") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold
+                    )
+                )
+                if (errorMsg != null) {
+                    Text(
+                        text = errorMsg!!,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val cleanIn = inputText.trim()
+                    val cleanOut = outputText.trim()
+                    if (cleanIn.isNotEmpty()) {
+                        onSave(cleanIn, cleanOut)
+                    } else {
+                        errorMsg = "Please enter an input prefix."
                     }
                 },
                 shape = RoundedCornerShape(12.dp),

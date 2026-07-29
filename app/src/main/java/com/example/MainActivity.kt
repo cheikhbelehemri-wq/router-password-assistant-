@@ -253,7 +253,7 @@ fun sanitizeSSID(
 // SSID Parsing
 fun parseSSID(
     ssid: String,
-    activePrefixes: List<String>,
+    prefixPairs: List<PrefixPairItem>,
     hexMap: Map<Char, Char>,
     forceLowercase: Boolean,
     strippingRules: List<StrippingRuleItem>
@@ -267,12 +267,41 @@ fun parseSSID(
         )
     }
 
-    var matchedPrefix: String? = null
-    for (prefix in activePrefixes) {
-        val clean = prefix.trim()
-        if (clean.isNotEmpty() && cleanSsid.contains(clean, ignoreCase = true)) {
-            matchedPrefix = clean
+    val activePairs = prefixPairs.filter { it.isEnabled && it.inputPrefix.isNotBlank() }
+        .sortedByDescending { it.inputPrefix.length }
+
+    var matchedPair: PrefixPairItem? = null
+    var matchedIndex = -1
+
+    for (pair in activePairs) {
+        val idx = cleanSsid.indexOf(pair.inputPrefix, ignoreCase = true)
+        if (idx >= 0) {
+            matchedPair = pair
+            matchedIndex = idx
             break
+        }
+    }
+
+    if (matchedPair != null && matchedIndex >= 0) {
+        val inPrefix = matchedPair.inputPrefix
+        val outPrefix = matchedPair.outputPrefix
+        val after = cleanSsid.substring(matchedIndex + inPrefix.length).trim()
+        val cleanAfter = after.removePrefix("_").removePrefix("-")
+        val customHexRegex = Regex("^([0-9a-fA-F]{4,32})$", RegexOption.IGNORE_CASE)
+        val customMatch = customHexRegex.find(cleanAfter)
+        if (customMatch != null) {
+            val hexPart = customMatch.groupValues[1]
+            val complement = applyHexComplement(hexPart, hexMap, forceLowercase)
+            val formattedOutPrefix = if (forceLowercase) outPrefix.lowercase() else outPrefix
+            val finalPassword = formattedOutPrefix + complement
+            val label = if (formattedOutPrefix.isNotEmpty()) "✓ Swapped ($inPrefix → $formattedOutPrefix)" else "✓ Decoded ($inPrefix)"
+            return SSIDParseResult(
+                isValid = true,
+                hexPart = hexPart,
+                badgeText = label,
+                isError = false,
+                suggestedPassword = finalPassword
+            )
         }
     }
 
@@ -280,25 +309,6 @@ fun parseSSID(
     val wlanRegex = Regex(".*wlan_?([0-9a-fA-F]{6}|[0-9a-fA-F]{12})$", RegexOption.IGNORE_CASE)
     val delimiterHex = Regex(".*[_-]([0-9a-fA-F]{6}|[0-9a-fA-F]{12})$", RegexOption.IGNORE_CASE)
     val pureHexSuffix = Regex(".*([0-9a-fA-F]{6}|[0-9a-fA-F]{12})$", RegexOption.IGNORE_CASE)
-
-    if (matchedPrefix != null) {
-        val idx = cleanSsid.indexOf(matchedPrefix, ignoreCase = true)
-        val after = cleanSsid.substring(idx + matchedPrefix.length).trim()
-        val cleanAfter = after.removePrefix("_").removePrefix("-")
-        val customHexRegex = Regex("^([0-9a-fA-F]{6}|[0-9a-fA-F]{12})$", RegexOption.IGNORE_CASE)
-        val customMatch = customHexRegex.find(cleanAfter)
-        if (customMatch != null) {
-            val hexPart = customMatch.groupValues[1]
-            val complement = applyHexComplement(hexPart, hexMap, forceLowercase)
-            return SSIDParseResult(
-                isValid = true,
-                hexPart = hexPart,
-                badgeText = "✓ Decoded ($matchedPrefix)",
-                isError = false,
-                suggestedPassword = complement
-            )
-        }
-    }
 
     val match = fhRegex6.find(cleanSsid)
         ?: wlanRegex.find(cleanSsid)
@@ -665,16 +675,12 @@ fun BottomNavBarXei5h(
 fun ConvertScreen(
     isForceLowercaseEnabled: Boolean,
     hexMap: Map<Char, Char>,
-    prefixesList: List<PrefixItem>,
+    prefixesList: List<PrefixPairItem>,
     strippingRulesList: List<StrippingRuleItem>,
     isDarkTheme: Boolean
 ) {
     val context = LocalContext.current
     val keyboardController = LocalSoftwareKeyboardController.current
-
-    val activePrefixes = remember(prefixesList) {
-        prefixesList.filter { it.isEnabled }.map { it.prefix }
-    }
 
     var selectedMode by remember { mutableStateOf(0) } // 0 = Auto SSID, 1 = Manual Hex
     var ssidInput by remember { mutableStateOf("Connected_Network") }
@@ -874,7 +880,7 @@ fun ConvertScreen(
                             // Status Badge
                             val parseResult = parseSSID(
                                 ssid = ssidInput,
-                                activePrefixes = activePrefixes,
+                                prefixPairs = prefixesList,
                                 hexMap = hexMap,
                                 forceLowercase = isForceLowercaseEnabled,
                                 strippingRules = strippingRulesList
@@ -902,7 +908,7 @@ fun ConvertScreen(
                     // Guidance or Complement Output Card
                     val parseResult = parseSSID(
                         ssid = ssidInput,
-                        activePrefixes = activePrefixes,
+                        prefixPairs = prefixesList,
                         hexMap = hexMap,
                         forceLowercase = isForceLowercaseEnabled,
                         strippingRules = strippingRulesList
@@ -1092,7 +1098,7 @@ fun ConvertScreen(
                                     discoveredList.forEach { item ->
                                         val res = parseSSID(
                                             ssid = item.ssid,
-                                            activePrefixes = activePrefixes,
+                                            prefixPairs = prefixesList,
                                             hexMap = hexMap,
                                             forceLowercase = isForceLowercaseEnabled,
                                             strippingRules = strippingRulesList
@@ -1610,7 +1616,7 @@ fun SettingsScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "NETWORK PREFIXES",
+                    text = "NETWORK PREFIX PAIRS (SWAPPING)",
                     style = MaterialTheme.typography.labelSmall.copy(
                         fontWeight = FontWeight.ExtraBold,
                         color = if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF475569),
@@ -1618,12 +1624,27 @@ fun SettingsScreen(
                     )
                 )
 
-                IconButton(onClick = { showAddPrefixDialog = true }) {
-                    Icon(
-                        imageVector = Icons.Default.Add,
-                        contentDescription = "Add Prefix",
-                        tint = SoftIndigoAccent
-                    )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    IconButton(onClick = { showAddPrefixDialog = true }) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "Add Pair",
+                            tint = SoftIndigoAccent
+                        )
+                    }
+                    IconButton(
+                        onClick = {
+                            val def = AppPreferencesRepository.getDefaultPrefixPairs()
+                            onUpdatePrefixes(def)
+                            triggerVibration(context)
+                        }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Reset Pairs",
+                            tint = SoftIndigoAccent
+                        )
+                    }
                 }
             }
 
@@ -1645,7 +1666,7 @@ fun SettingsScreen(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                text = item.prefix,
+                                text = "${item.inputPrefix}  →  ${if (item.outputPrefix.isNotBlank()) item.outputPrefix else "(none)"}",
                                 style = MaterialTheme.typography.bodyLarge.copy(
                                     fontWeight = FontWeight.ExtraBold,
                                     fontFamily = FontFamily.Monospace,
@@ -1797,27 +1818,25 @@ fun SettingsScreen(
     }
 
     if (showAddPrefixDialog) {
-        EditItemStringDialog(
-            title = "Add Network Prefix",
-            initialValue = "",
-            placeholder = "e.g., WLAN_",
+        EditPrefixPairDialog(
+            initialInput = "",
+            initialOutput = "",
             onDismiss = { showAddPrefixDialog = false },
-            onSave = { str ->
-                onUpdatePrefixes(prefixesList + PrefixItem(prefix = str, isEnabled = true))
+            onSave = { inStr, outStr ->
+                onUpdatePrefixes(prefixesList + PrefixPairItem(inputPrefix = inStr, outputPrefix = outStr, isEnabled = true))
                 showAddPrefixDialog = false
             }
         )
     }
 
     if (editingPrefix != null) {
-        EditItemStringDialog(
-            title = "Edit Network Prefix",
-            initialValue = editingPrefix!!.prefix,
-            placeholder = "e.g., WLAN_",
+        EditPrefixPairDialog(
+            initialInput = editingPrefix!!.inputPrefix,
+            initialOutput = editingPrefix!!.outputPrefix,
             onDismiss = { editingPrefix = null },
-            onSave = { str ->
+            onSave = { inStr, outStr ->
                 val updated = prefixesList.map {
-                    if (it.id == editingPrefix!!.id) it.copy(prefix = str) else it
+                    if (it.id == editingPrefix!!.id) it.copy(inputPrefix = inStr, outputPrefix = outStr) else it
                 }
                 onUpdatePrefixes(updated)
                 editingPrefix = null
