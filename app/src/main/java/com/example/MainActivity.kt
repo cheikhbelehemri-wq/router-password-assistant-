@@ -435,6 +435,7 @@ fun tryWifiNetworkSuggestionFallback(
 fun removeWifiNetworkSuggestion(
     context: Context,
     ssid: String,
+    password: String? = null,
     onStatusUpdate: (String) -> Unit
 ) {
     if (ssid.isBlank()) {
@@ -442,60 +443,91 @@ fun removeWifiNetworkSuggestion(
         return
     }
 
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-        if (wifiManager != null) {
-            try {
-                val suggestion = WifiNetworkSuggestion.Builder()
-                    .setSsid(ssid)
-                    .build()
+    val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+    if (wifiManager == null) {
+        onStatusUpdate("Wi-Fi Manager unavailable")
+        return
+    }
 
-                val status = wifiManager.removeNetworkSuggestions(listOf(suggestion))
-                if (status == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS) {
-                    val msg = "Network suggestion removed"
-                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                    onStatusUpdate("Network suggestion removed for '$ssid'")
-                } else {
-                    val msg = "Network suggestion removed"
-                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                    onStatusUpdate("Removal status code: $status")
-                }
-            } catch (e: Exception) {
-                val msg = "Failed to remove suggestion: ${e.localizedMessage}"
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        try {
+            val suggestions = mutableListOf<WifiNetworkSuggestion>()
+            
+            // Plain SSID suggestion
+            try {
+                suggestions.add(WifiNetworkSuggestion.Builder().setSsid(ssid).build())
+            } catch (_: Exception) {}
+
+            // WPA2 passphrase suggestion if password is available
+            if (!password.isNullOrBlank()) {
+                try {
+                    suggestions.add(
+                        WifiNetworkSuggestion.Builder()
+                            .setSsid(ssid)
+                            .setWpa2Passphrase(password)
+                            .build()
+                    )
+                } catch (_: Exception) {}
+            }
+
+            val status = wifiManager.removeNetworkSuggestions(suggestions)
+            if (status == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS) {
+                val msg = "Network suggestion removed for '$ssid'"
                 Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                 onStatusUpdate(msg)
+            } else {
+                val detailMsg = if (status == WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_REMOVE_INVALID) {
+                    "Code 5 (System Protected Network): Saved by Android OS settings. Opening Wi-Fi Settings..."
+                } else {
+                    "Status code $status. Opening Wi-Fi settings..."
+                }
+                
+                Toast.makeText(context, detailMsg, Toast.LENGTH_LONG).show()
+                onStatusUpdate(detailMsg)
+
+                try {
+                    val settingsIntent = Intent(Settings.ACTION_WIFI_SETTINGS).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(settingsIntent)
+                } catch (e: Exception) {
+                    onStatusUpdate("Could not open Wi-Fi settings: ${e.localizedMessage}")
+                }
             }
-        } else {
-            onStatusUpdate("Wi-Fi Manager unavailable")
+        } catch (e: Exception) {
+            val msg = "Failed to remove suggestion: ${e.localizedMessage}"
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+            onStatusUpdate(msg)
         }
     } else {
         @Suppress("DEPRECATION")
-        val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-        if (wifiManager != null) {
-            try {
+        try {
+            @Suppress("DEPRECATION")
+            val configured = wifiManager.configuredNetworks
+            val match = configured?.firstOrNull { it.SSID == "\"" + ssid + "\"" || it.SSID == ssid }
+            if (match != null) {
                 @Suppress("DEPRECATION")
-                val configured = wifiManager.configuredNetworks
-                val match = configured?.firstOrNull { it.SSID == "\"$ssid\"" || it.SSID == ssid }
-                if (match != null) {
-                    @Suppress("DEPRECATION")
-                    wifiManager.removeNetwork(match.networkId)
-                    @Suppress("DEPRECATION")
-                    wifiManager.saveConfiguration()
-                    val msg = "Network suggestion removed"
-                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                    onStatusUpdate("Removed network '$ssid'")
-                } else {
-                    val msg = "Network suggestion removed"
-                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                    onStatusUpdate("Network '$ssid' not found")
-                }
-            } catch (e: Exception) {
-                val msg = "Failed to remove network: ${e.localizedMessage}"
+                val success = wifiManager.removeNetwork(match.networkId)
+                @Suppress("DEPRECATION")
+                wifiManager.saveConfiguration()
+                val msg = if (success) "Removed network '$ssid'" else "Failed to remove network '$ssid'"
                 Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                 onStatusUpdate(msg)
+            } else {
+                val msg = "Network '$ssid' not found in legacy list. Opening Wi-Fi Settings..."
+                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                onStatusUpdate(msg)
+                try {
+                    val settingsIntent = Intent(Settings.ACTION_WIFI_SETTINGS).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(settingsIntent)
+                } catch (_: Exception) {}
             }
-        } else {
-            onStatusUpdate("Wi-Fi Manager unavailable")
+        } catch (e: Exception) {
+            val msg = "Failed to remove network: ${e.localizedMessage}"
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+            onStatusUpdate(msg)
         }
     }
 }
@@ -1238,7 +1270,8 @@ fun ConvertScreen(
                                         onClick = {
                                             removeWifiNetworkSuggestion(
                                                 context = context,
-                                                ssid = ssidInput
+                                                ssid = ssidInput,
+                                                password = if (parseResult.isValid) parseResult.suggestedPassword else null
                                             ) { status ->
                                                 wifiStatusText = status
                                             }
@@ -1465,7 +1498,8 @@ fun ConvertScreen(
                                                             onClick = {
                                                                 removeWifiNetworkSuggestion(
                                                                     context = context,
-                                                                    ssid = item.ssid
+                                                                    ssid = item.ssid,
+                                                                    password = if (res.isValid) res.suggestedPassword else null
                                                                 ) { status ->
                                                                     wifiStatusText = status
                                                                 }
