@@ -360,6 +360,32 @@ fun parseSSID(
     )
 }
 
+// Helper to launch native System Wi-Fi Panel overlay (Android 10+ / API 29+)
+fun launchWifiPanel(context: Context) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        try {
+            val intent = Intent("android.settings.panel.action.WIFI").apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(intent)
+        } catch (_: Exception) {
+            try {
+                val intent = Intent(Settings.ACTION_WIFI_SETTINGS).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                context.startActivity(intent)
+            } catch (_: Exception) {}
+        }
+    } else {
+        try {
+            val intent = Intent(Settings.ACTION_WIFI_SETTINGS).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(intent)
+        } catch (_: Exception) {}
+    }
+}
+
 // Fallback Wi-Fi Suggestion for Android 10+
 fun tryWifiNetworkSuggestionFallback(
     context: Context,
@@ -375,6 +401,11 @@ fun tryWifiNetworkSuggestionFallback(
                     .setSsid(ssid)
                     .setIsAppInteractionRequired(false)
 
+                try {
+                    val method = suggestionBuilder.javaClass.getMethod("setIsInitialAutoconnectEnabled", Boolean::class.javaPrimitiveType ?: Boolean::class.java)
+                    method.invoke(suggestionBuilder, true)
+                } catch (_: Throwable) {}
+
                 if (password.isNotBlank()) {
                     try {
                         suggestionBuilder.setWpa2Passphrase(password)
@@ -387,10 +418,10 @@ fun tryWifiNetworkSuggestionFallback(
                 if (status == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS) {
                     onStatusUpdate("Wi-Fi suggestion registered for '$ssid'. System will auto-connect.")
                 } else {
-                    onStatusUpdate("Connection Failed (Suggestion code: $status)")
+                    onStatusUpdate("Wi-Fi panel opened. Password copied!")
                 }
             } catch (e: Exception) {
-                onStatusUpdate("Connection Failed: ${e.localizedMessage}")
+                onStatusUpdate("Wi-Fi panel opened. Password copied!")
             }
         } else {
             onStatusUpdate("Wi-Fi Manager unavailable")
@@ -410,7 +441,11 @@ fun connectToWifiNetwork(
 ) {
     // 1. User Feedback & Clipboard Backup: Copy password to Clipboard & display Toast
     copyToClipboard(context, password) {}
-    Toast.makeText(context, "Password copied & connection requested", Toast.LENGTH_SHORT).show()
+    Toast.makeText(
+        context,
+        "Password copied to clipboard! Paste it in the Wi-Fi window.",
+        Toast.LENGTH_LONG
+    ).show()
 
     // 2. Enforce Runtime Permissions (ACCESS_FINE_LOCATION & CHANGE_WIFI_STATE)
     if (!hasConnectPermissions(context)) {
@@ -423,7 +458,8 @@ fun connectToWifiNetwork(
                 Toast.LENGTH_LONG
             ).show()
         }
-        onStatusUpdate("Missing permissions (Location & Wi-Fi State)")
+        onStatusUpdate("Missing permissions. Password copied!")
+        launchWifiPanel(context)
         return
     }
 
@@ -431,7 +467,7 @@ fun connectToWifiNetwork(
     if (!isLocationServicesEnabled(context)) {
         Toast.makeText(
             context,
-            "Location Services (GPS) are turned off. Please enable GPS.",
+            "Location Services (GPS) are turned off. Opening Settings...",
             Toast.LENGTH_LONG
         ).show()
         try {
@@ -440,61 +476,67 @@ fun connectToWifiNetwork(
             }
             context.startActivity(intent)
         } catch (_: Exception) {}
-        onStatusUpdate("Location Services (GPS) turned off")
+        onStatusUpdate("Location Services (GPS) off. Password copied!")
+        launchWifiPanel(context)
         return
     }
 
     onStatusUpdate("Connecting to $ssid...")
 
     val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-    if (connectivityManager == null) {
-        onStatusUpdate("ConnectivityManager unavailable")
-        return
-    }
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         // Modern Android Connection Logic (Android 10+ / API 29+)
-        try {
-            val specifierBuilder = WifiNetworkSpecifier.Builder()
-                .setSsid(ssid)
-
-            if (password.isNotBlank()) {
-                try {
-                    specifierBuilder.setWpa2Passphrase(password)
-                } catch (_: Exception) {}
-            }
-
-            val specifier = specifierBuilder.build()
-
-            val request = NetworkRequest.Builder()
-                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
-                .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                .setNetworkSpecifier(specifier)
-                .build()
-
-            val callback = object : ConnectivityManager.NetworkCallback() {
-                override fun onAvailable(network: android.net.Network) {
-                    try {
-                        connectivityManager.bindProcessToNetwork(network)
-                    } catch (_: Exception) {}
-                    onStatusUpdate("Connected successfully to $ssid")
-                }
-
-                override fun onUnavailable() {
-                    // Fallback to WifiNetworkSuggestion
-                    tryWifiNetworkSuggestionFallback(context, ssid, password, onStatusUpdate)
-                }
-
-                override fun onLost(network: android.net.Network) {
-                    onStatusUpdate("Disconnected from $ssid")
-                }
-            }
-
-            connectivityManager.requestNetwork(request, callback, 20000)
-        } catch (e: Exception) {
-            // Fallback mechanism using WifiNetworkSuggestion.Builder
-            tryWifiNetworkSuggestionFallback(context, ssid, password, onStatusUpdate)
+        // 1) Register WifiNetworkSuggestion with auto-connect enabled
+        tryWifiNetworkSuggestionFallback(context, ssid, password) { status ->
+            onStatusUpdate(status)
         }
+
+        // 2) Request connection via Specifier
+        if (connectivityManager != null) {
+            try {
+                val specifierBuilder = WifiNetworkSpecifier.Builder()
+                    .setSsid(ssid)
+
+                if (password.isNotBlank()) {
+                    try {
+                        specifierBuilder.setWpa2Passphrase(password)
+                    } catch (_: Exception) {}
+                }
+
+                val specifier = specifierBuilder.build()
+
+                val request = NetworkRequest.Builder()
+                    .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                    .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .setNetworkSpecifier(specifier)
+                    .build()
+
+                val callback = object : ConnectivityManager.NetworkCallback() {
+                    override fun onAvailable(network: android.net.Network) {
+                        try {
+                            connectivityManager.bindProcessToNetwork(network)
+                        } catch (_: Exception) {}
+                        onStatusUpdate("Connected successfully to $ssid")
+                    }
+
+                    override fun onUnavailable() {
+                        onStatusUpdate("Opening Wi-Fi Panel... Password copied!")
+                    }
+
+                    override fun onLost(network: android.net.Network) {
+                        onStatusUpdate("Disconnected from $ssid")
+                    }
+                }
+
+                connectivityManager.requestNetwork(request, callback, 15000)
+            } catch (e: Exception) {
+                onStatusUpdate("Opening Wi-Fi Panel... Password copied!")
+            }
+        }
+
+        // 3) Open System Wi-Fi Panel Overlay (Settings.PANEL_WIFI)
+        launchWifiPanel(context)
     } else {
         // Legacy WifiManager.addNetwork() approach for devices below Android 10
         @Suppress("DEPRECATION")
@@ -525,13 +567,15 @@ fun connectToWifiNetwork(
                     wifiManager.reconnect()
                     onStatusUpdate("Connected successfully to $ssid")
                 } else {
-                    onStatusUpdate("Connection Failed")
+                    onStatusUpdate("Opening Wi-Fi Settings... Password copied!")
+                    launchWifiPanel(context)
                 }
             } catch (e: Exception) {
-                onStatusUpdate("Connection Failed: ${e.localizedMessage}")
+                onStatusUpdate("Opening Wi-Fi Settings...")
+                launchWifiPanel(context)
             }
         } else {
-            onStatusUpdate("Wi-Fi Manager unavailable")
+            launchWifiPanel(context)
         }
     }
 }
